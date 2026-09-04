@@ -1,190 +1,177 @@
-import { useState, useRef, useEffect } from 'react';
-import { Camera, Check, X, Loader2, Scan, VideoOff } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import { Camera, Check, Loader2, Plus, Trash2, VideoOff, X } from 'lucide-react';
+import { api, errorMessage } from '../lib/api';
+import { useToast } from '../components/Toast';
+import { DemoNotice } from '../components/States';
 
+const BLANK_LINE = { sku_name: '', qty: 1, cost_price: 0 };
+
+/**
+ * Capture a wholesale bill and add its items to stock.
+ *
+ * OCR is not wired up: the extraction step is a placeholder, and it says so
+ * rather than presenting invented line items as if they had been read from the
+ * photo. The manual entry path below it is real and writes to inventory.
+ */
 export default function ScanReceipt() {
-  const [status, setStatus] = useState('idle'); // idle, scanning, review, saving
-  const [items, setItems] = useState([]);
+  const [stage, setStage] = useState('capture'); // capture | review | saving
+  const [lines, setLines] = useState([{ ...BLANK_LINE }]);
   const [cameraError, setCameraError] = useState('');
+
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const navigate = useNavigate();
-
-  const startCamera = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: 'environment' } 
-      });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-      streamRef.current = stream;
-      setCameraError('');
-    } catch (err) {
-      console.error("Camera error:", err);
-      setCameraError("Camera permission denied or device unavailable.");
-    }
-  };
-
-  const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-    }
-  };
+  const toast = useToast();
 
   useEffect(() => {
-    // Start camera when component mounts and status is idle
-    if (status === 'idle') {
-      startCamera();
-    } else {
+    if (stage !== 'capture') {
       stopCamera();
+      return undefined;
     }
 
-    // Cleanup camera when component unmounts
+    let cancelled = false;
+    navigator.mediaDevices
+      ?.getUserMedia({ video: { facingMode: 'environment' } })
+      .then((stream) => {
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        streamRef.current = stream;
+        if (videoRef.current) videoRef.current.srcObject = stream;
+        setCameraError('');
+      })
+      .catch(() => setCameraError('Camera unavailable or permission denied.'));
+
     return () => {
+      cancelled = true;
       stopCamera();
     };
-  }, [status]);
+  }, [stage]);
 
-  const handleScan = () => {
-    // In a real implementation, we would draw the video frame to a canvas and send the image blob to the backend.
-    setStatus('scanning');
-    stopCamera();
-    
-    // Simulate OCR processing time
-    setTimeout(() => {
-      setItems([
-        { id: 1, sku_name: 'Amul Milk 500ml', qty: 20 },
-        { id: 2, sku_name: 'Britannia Bread', qty: 15 },
-        { id: 3, sku_name: 'Sunflower Oil 1L', qty: 5 },
-      ]);
-      setStatus('review');
-    }, 2000);
+  const stopCamera = () => {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
   };
 
-  const handleSave = async () => {
-    setStatus('saving');
+  const save = async () => {
+    const valid = lines.filter((line) => line.sku_name.trim() && Number(line.qty) > 0);
+    if (!valid.length) {
+      toast.error('Add at least one item with a quantity');
+      return;
+    }
+    setStage('saving');
     try {
-      const authData = JSON.parse(localStorage.getItem('vendor_auth') || sessionStorage.getItem('vendor_auth'));
-      await axios.post('http://127.0.0.1:8000/api/inventory/ocr-entry', {
-        vendor_id: authData?.vendor_id,
-        items: items
+      const res = await api.post('/inventory/ocr-entry', {
+        items: valid.map((line) => ({
+          sku_name: line.sku_name.trim(),
+          qty: Number(line.qty),
+          cost_price: Number(line.cost_price) || null,
+        })),
       });
-      alert('Receipt processed and inventory updated successfully!');
+      toast.success(res.data.message);
       navigate('/app/stock');
     } catch (err) {
-      console.error(err);
-      alert('Error saving receipt');
-      setStatus('review');
+      toast.error(errorMessage(err));
+      setStage('review');
     }
   };
 
+  const setLine = (index, field, value) =>
+    setLines((current) => current.map((line, i) => (i === index ? { ...line, [field]: value } : line)));
+
   return (
-    <div className="flex flex-col items-center justify-start h-full pt-4 pb-20 px-4">
-      
-      <div className="w-full mb-6 text-center">
-        <h2 className="text-xl font-bold text-brand-ink">Scan Receipt</h2>
-        <p className="text-sm text-brand-muted mt-1">Auto-extract items from wholesale bills</p>
+    <div className="max-w-md mx-auto pt-2 pb-24 px-1">
+      <div className="text-center mb-5">
+        <h2 className="text-xl font-bold text-brand-ink font-inter">Add from a bill</h2>
+        <p className="text-sm text-brand-muted mt-1">Restock from a wholesale invoice</p>
       </div>
 
-      {status === 'idle' && (
-        <div className="w-full flex flex-col items-center">
-          <div className="w-full h-80 bg-black rounded-2xl flex items-center justify-center relative shadow-inner overflow-hidden mb-8 transition-colors">
-            
+      {stage === 'capture' && (
+        <div className="space-y-5">
+          <DemoNotice>
+            Automatic text extraction is not connected yet, so the photo is a
+            reference for you rather than something the app reads. Type the
+            lines below and they will be added to your stock for real.
+          </DemoNotice>
+
+          <div className="w-full h-64 bg-black rounded-2xl flex items-center justify-center relative overflow-hidden">
             {cameraError ? (
-              <div className="flex flex-col items-center text-brand-danger z-10 px-6 text-center">
-                <VideoOff size={48} className="mb-3 opacity-80" />
+              <div className="flex flex-col items-center text-white/80 px-6 text-center">
+                <VideoOff size={40} className="mb-3 opacity-70" />
                 <p className="text-sm font-semibold">{cameraError}</p>
-                <p className="text-xs mt-2 text-white/60">Please allow camera access in your browser settings.</p>
               </div>
             ) : (
-              <video 
-                ref={videoRef} 
-                autoPlay 
-                playsInline 
-                muted 
-                className="absolute inset-0 w-full h-full object-cover"
-              />
-            )}
-            
-            {/* Viewfinder overlay */}
-            {!cameraError && (
               <>
-                <div className="absolute inset-4 border-2 border-dashed border-white/60 rounded-xl z-10 pointer-events-none shadow-[0_0_0_4000px_rgba(0,0,0,0.3)]"></div>
-                <p className="absolute bottom-8 text-white text-sm z-10 font-medium px-4 py-1.5 bg-black/50 backdrop-blur-sm rounded-full">
-                  Point camera at wholesale bill
-                </p>
+                <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-cover" />
+                <div className="absolute inset-4 border-2 border-dashed border-white/60 rounded-2xl pointer-events-none" />
               </>
             )}
           </div>
-          
-          <button 
-            onClick={handleScan}
-            disabled={!!cameraError}
-            className={`w-20 h-20 rounded-full flex items-center justify-center shadow-lg transition-transform border-4 border-brand-surface ring-2 ring-brand-teal ${
-              cameraError 
-                ? 'bg-gray-400 text-gray-200 cursor-not-allowed border-brand-surface ring-gray-400' 
-                : 'bg-brand-teal text-white active:scale-95'
-            }`}
+
+          <button
+            onClick={() => setStage('review')}
+            className="w-full bg-brand-primary text-brand-on-primary font-bold py-3.5 rounded-2xl shadow-md flex items-center justify-center gap-2 focus-visible:ring-2 focus-visible:ring-brand-primary outline-none"
           >
-            <Camera size={32} />
+            <Camera size={18} /> Enter the items
           </button>
         </div>
       )}
 
-      {status === 'scanning' && (
-        <div className="flex flex-col items-center justify-center h-64 space-y-4">
-          <Loader2 className="animate-spin text-brand-teal" size={48} />
-          <p className="text-brand-ink font-semibold animate-pulse">Running OCR Engine...</p>
-        </div>
-      )}
-
-      {status === 'review' && (
-        <div className="w-full max-w-sm">
-          <div className="bg-brand-surface rounded-xl shadow-sm border border-brand-border overflow-hidden mb-6 transition-colors">
-            <div className="bg-brand-bg px-4 py-3 border-b border-brand-border">
-              <h3 className="text-sm font-bold text-brand-ink">Detected Items</h3>
+      {(stage === 'review' || stage === 'saving') && (
+        <div className="space-y-3">
+          {lines.map((line, index) => (
+            <div key={index} className="bg-brand-surface border border-brand-border rounded-2xl p-3 space-y-2 shadow-sm">
+              <div className="flex gap-2">
+                <input
+                  value={line.sku_name}
+                  onChange={(e) => setLine(index, 'sku_name', e.target.value)}
+                  placeholder="Item name"
+                  aria-label={`Item ${index + 1} name`}
+                  className="flex-1 bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                />
+                {lines.length > 1 && (
+                  <button
+                    onClick={() => setLines((current) => current.filter((_, i) => i !== index))}
+                    aria-label={`Remove item ${index + 1}`}
+                    className="w-9 h-9 shrink-0 rounded-lg bg-brand-bg border border-brand-border text-brand-muted hover:text-brand-danger flex items-center justify-center"
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block">
+                  <span className="text-[10px] font-bold text-brand-muted uppercase">Quantity</span>
+                  <input type="number" step="any" min="0" value={line.qty} onChange={(e) => setLine(index, 'qty', e.target.value)} className="w-full mt-0.5 bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm font-bold text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-primary" />
+                </label>
+                <label className="block">
+                  <span className="text-[10px] font-bold text-brand-muted uppercase">Cost each (₹)</span>
+                  <input type="number" step="0.01" min="0" value={line.cost_price} onChange={(e) => setLine(index, 'cost_price', e.target.value)} className="w-full mt-0.5 bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm font-bold text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-primary" />
+                </label>
+              </div>
             </div>
-            <div className="divide-y divide-brand-border">
-              {items.map(item => (
-                <div key={item.id} className="p-4 flex justify-between items-center">
-                  <div>
-                    <p className="text-sm font-semibold text-brand-ink">{item.sku_name}</p>
-                    <p className="text-xs text-brand-muted">Qty: {item.qty}</p>
-                  </div>
-                  <Check size={20} className="text-brand-teal" />
-                </div>
-              ))}
-            </div>
-          </div>
+          ))}
 
-          <div className="flex space-x-3">
-            <button 
-              onClick={() => setStatus('idle')} 
-              className="flex-1 py-3 px-4 rounded-xl border border-brand-border text-brand-ink font-semibold flex items-center justify-center space-x-2 bg-brand-surface active:opacity-80 shadow-sm transition-all"
-            >
-              <X size={18} />
-              <span>Retake</span>
+          <button
+            onClick={() => setLines((current) => [...current, { ...BLANK_LINE }])}
+            className="w-full text-xs font-bold bg-brand-bg border border-dashed border-brand-border py-2.5 rounded-2xl text-brand-ink flex items-center justify-center gap-1.5"
+          >
+            <Plus size={14} /> Add another line
+          </button>
+
+          <div className="flex gap-3 pt-2">
+            <button onClick={() => setStage('capture')} className="flex-1 py-3 rounded-2xl border border-brand-border text-brand-ink font-semibold bg-brand-surface flex items-center justify-center gap-2 text-sm">
+              <X size={17} /> Back
             </button>
-            <button 
-              onClick={handleSave} 
-              className="flex-1 py-3 px-4 rounded-xl bg-brand-teal text-white font-semibold flex items-center justify-center space-x-2 active:bg-brand-teal-dark shadow-sm transition-colors"
-            >
-              <Check size={18} />
-              <span>Confirm & Save</span>
+            <button onClick={save} disabled={stage === 'saving'} className="flex-1 py-3 rounded-2xl bg-brand-primary text-brand-on-primary font-semibold flex items-center justify-center gap-2 text-sm disabled:opacity-60">
+              {stage === 'saving' ? <Loader2 size={17} className="animate-spin" /> : <Check size={17} />}
+              Add to stock
             </button>
           </div>
         </div>
       )}
-      
-      {status === 'saving' && (
-        <div className="flex flex-col items-center justify-center h-64 space-y-4">
-          <Loader2 className="animate-spin text-brand-teal" size={48} />
-          <p className="text-brand-ink font-semibold">Updating Inventory...</p>
-        </div>
-      )}
-
     </div>
   );
 }

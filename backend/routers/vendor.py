@@ -1,54 +1,67 @@
+"""The signed-in vendor's own profile. No vendor_id is ever taken from the client."""
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from database import get_db
+
 import models
-from pydantic import BaseModel
+import schemas
+import security
+from database import get_db
 
 router = APIRouter()
 
-class VendorUpdate(BaseModel):
-    name: str
-    store_name: str
-    phone: str
 
-@router.get("/{vendor_id}")
-def get_vendor(vendor_id: str, db: Session = Depends(get_db)):
-    vendor = db.query(models.Vendor).filter(models.Vendor.id == vendor_id).first()
-    
-    # If the database was just created and not seeded yet, create a dummy test_vendor
-    if not vendor and vendor_id == "test_vendor":
-        vendor = models.Vendor(id=vendor_id, name="Rakesh Sharma", store_name="Sharma General Store", phone="+91 9876543210")
-        db.add(vendor)
-        db.commit()
-        db.refresh(vendor)
-    elif not vendor:
-        raise HTTPException(status_code=404, detail="Vendor not found")
-        
-    # Make sure vendor_code is present for existing vendors (schema migration polyfill)
+def _profile(vendor: models.Vendor, db: Session) -> schemas.VendorResponse:
+    total_items = (
+        db.query(models.InventoryItem)
+        .filter(
+            models.InventoryItem.vendor_id == vendor.id,
+            models.InventoryItem.is_archived.is_(False),
+        )
+        .count()
+    )
+    # Backfill for rows created before vendor_code existed.
     if not vendor.vendor_code:
         vendor.vendor_code = models.generate_vendor_code()
         db.commit()
-        db.refresh(vendor)
 
-    items_count = db.query(models.InventoryItem).filter(models.InventoryItem.vendor_id == vendor_id).count()
-    
-    return {
-        "id": vendor.id,
-        "vendor_code": vendor.vendor_code,
-        "name": vendor.name,
-        "store_name": vendor.store_name,
-        "phone": vendor.phone or "+91 9876543210",
-        "total_items": items_count
-    }
+    return schemas.VendorResponse(
+        id=vendor.id,
+        vendor_code=vendor.vendor_code,
+        name=vendor.name,
+        store_name=vendor.store_name,
+        phone=vendor.phone,
+        upi_id=vendor.upi_id,
+        total_items=total_items,
+    )
 
-@router.put("/{vendor_id}")
-def update_vendor(vendor_id: str, req: VendorUpdate, db: Session = Depends(get_db)):
-    vendor = db.query(models.Vendor).filter(models.Vendor.id == vendor_id).first()
-    if not vendor:
-        raise HTTPException(status_code=404, detail="Vendor not found")
-    
-    vendor.name = req.name
-    vendor.store_name = req.store_name
-    vendor.phone = req.phone
+
+@router.get("/me", response_model=schemas.VendorResponse)
+def get_profile(
+    vendor: models.Vendor = Depends(security.get_current_vendor),
+    db: Session = Depends(get_db),
+):
+    return _profile(vendor, db)
+
+
+@router.put("/me", response_model=schemas.VendorResponse)
+def update_profile(
+    req: schemas.VendorUpdate,
+    vendor: models.Vendor = Depends(security.get_current_vendor),
+    db: Session = Depends(get_db),
+):
+    if req.phone:
+        clash = (
+            db.query(models.Vendor)
+            .filter(models.Vendor.phone == req.phone.strip(), models.Vendor.id != vendor.id)
+            .first()
+        )
+        if clash:
+            raise HTTPException(status_code=409, detail="That phone number is already registered")
+
+    vendor.name = req.name.strip()
+    vendor.store_name = req.store_name.strip()
+    vendor.phone = (req.phone or "").strip() or None
+    vendor.upi_id = req.upi_id
     db.commit()
-    return {"message": "Profile updated successfully"}
+    db.refresh(vendor)
+    return _profile(vendor, db)

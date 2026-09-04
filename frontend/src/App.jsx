@@ -1,142 +1,192 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import {
+  Bell, BookOpen, HeartPulse, Home, Loader2, Map as MapIcon, Menu, Mic, Moon,
+  MoreHorizontal, Package, ScanLine, ShoppingCart, Sun, TrendingUp, X,
+} from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import './i18n';
-import { Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
-import { Home, Package, Mic, TrendingUp, HeartPulse, Moon, Sun, Map as MapIcon, Bell, BookOpen } from 'lucide-react';
-import { useTranslation as useI18n } from 'react-i18next';
 
-// Public Pages
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { ToastProvider } from './components/Toast';
+import { useApi } from './hooks/useApi';
+
 import Landing from './pages/Landing';
 import Legal from './pages/Legal';
 import Auth from './pages/Auth';
 
-// App Pages
+import Account from './pages/Account';
+import Billing from './pages/Billing';
 import Dashboard from './pages/Dashboard';
-import VoiceEntry from './pages/VoiceEntry';
-import Inventory from './pages/Inventory';
-import KhataDashboard from './pages/KhataDashboard';
 import Forecast from './pages/Forecast';
 import HealthScore from './pages/HealthScore';
-import ScanReceipt from './pages/ScanReceipt';
-import Account from './pages/Account';
 import Heatmap from './pages/Heatmap';
+import Inventory from './pages/Inventory';
+import KhataDashboard from './pages/KhataDashboard';
 import Notifications from './pages/Notifications';
+import ScanReceipt from './pages/ScanReceipt';
+import VoiceEntry from './pages/VoiceEntry';
 
-// Protects the /app routes by checking for a token
 function ProtectedRoute({ children }) {
-  const isAuth = localStorage.getItem('vendor_auth') || sessionStorage.getItem('vendor_auth');
-  if (!isAuth) {
-    return <Navigate to="/auth" replace />;
+  const { isAuthenticated, checking } = useAuth();
+
+  // Wait for the stored token to be validated. Previously any string in
+  // localStorage counted as a session, so a revoked token still got you in.
+  if (checking) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-brand-bg">
+        <Loader2 className="animate-spin text-brand-primary" size={32} />
+      </div>
+    );
   }
-  return children;
+  return isAuthenticated ? children : <Navigate to="/auth" replace />;
+}
+
+function useTheme() {
+  // The inline script in index.html has already applied the class before first
+  // paint; this only mirrors it into React state.
+  const [isDark, setIsDark] = useState(
+    () => typeof document !== 'undefined' && document.documentElement.classList.contains('dark'),
+  );
+
+  const toggle = () => {
+    const next = !isDark;
+    document.documentElement.classList.toggle('dark', next);
+    localStorage.setItem('theme', next ? 'dark' : 'light');
+    setIsDark(next);
+  };
+
+  return { isDark, toggle };
 }
 
 function AppLayout() {
-  const [isDark, setIsDark] = useState(false);
   const location = useLocation();
-  const path = location.pathname;
-  const { t } = useI18n();
+  const { t } = useTranslation();
+  const { isDark, toggle } = useTheme();
+  const { displayName, storeName } = useAuth();
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [moreOpen, setMoreOpen] = useState(false);
 
-  const navItems = [
+  // The alert dot means something now: it tracks stock actually about to expire.
+  const expiring = useApi('/inventory/expiring-soon', { params: { days: 7 } });
+  const alertCount = expiring.data?.length || 0;
+
+  const path = location.pathname;
+  useEffect(() => setMoreOpen(false), [path]);
+
+  const primaryNav = [
     { name: t('nav.home'), path: '/app', icon: Home },
-    { name: t('nav.khata'), path: '/app/khata', icon: BookOpen },
+    { name: t('nav.billing'), path: '/app/billing', icon: ShoppingCart },
     { name: t('nav.stock'), path: '/app/stock', icon: Package },
+    { name: t('nav.khata'), path: '/app/khata', icon: BookOpen },
+  ];
+  const secondaryNav = [
     { name: t('nav.log'), path: '/app/log', icon: Mic },
+    { name: t('dashboard.scan'), path: '/app/scan', icon: ScanLine },
     { name: t('nav.forecast'), path: '/app/forecast', icon: TrendingUp },
     { name: t('nav.score'), path: '/app/score', icon: HeartPulse },
-    { name: t('dashboard.heatmap'), path: '/app/heatmap', icon: MapIcon } // Included in desktop sidebar
+    { name: t('dashboard.heatmap'), path: '/app/heatmap', icon: MapIcon },
   ];
+  const allNav = [...primaryNav, ...secondaryNav];
 
-  useEffect(() => {
-    if (localStorage.theme === 'dark') {
-      document.documentElement.classList.add('dark');
-      setIsDark(true);
-    } else {
-      document.documentElement.classList.remove('dark');
-      setIsDark(false);
-      if (!localStorage.theme) {
-        localStorage.theme = 'light';
-      }
-    }
-  }, []);
-
-  const toggleTheme = () => {
-    if (isDark) {
-      document.documentElement.classList.remove('dark');
-      localStorage.theme = 'light';
-      setIsDark(false);
-    } else {
-      document.documentElement.classList.add('dark');
-      localStorage.theme = 'dark';
-      setIsDark(true);
-    }
-  };
+  const initials = (displayName || storeName || '?')
+    .split(' ').map((n) => n[0]).join('').substring(0, 2).toUpperCase();
 
   return (
-    <div className="flex h-screen bg-brand-bg text-brand-ink transition-colors duration-300 w-full overflow-hidden">
-      
-      {/* DESKTOP SIDEBAR */}
-      <aside className="hidden md:flex w-64 flex-col bg-brand-surface border-r border-brand-border z-20 transition-colors shadow-sm">
-        <div className="p-6 border-b border-brand-border">
-          <Link to="/" className="text-2xl font-bold font-poppins text-brand-teal flex items-center">
-            <div className="w-8 h-8 rounded bg-brand-teal text-white flex items-center justify-center mr-2 shadow-sm">V</div>
-            Vendor360
-          </Link>
+    <div className="flex h-screen bg-brand-bg text-brand-ink w-full overflow-hidden font-roboto">
+      <aside
+        className={`hidden md:flex flex-col bg-brand-bg z-20 transition-all duration-200 ${
+          sidebarOpen ? 'w-64' : 'w-[76px]'
+        }`}
+      >
+        <div className="p-4 pl-5 flex items-center h-16 gap-3">
+          <button
+            onClick={() => setSidebarOpen((open) => !open)}
+            aria-label={sidebarOpen ? 'Collapse menu' : 'Expand menu'}
+            aria-expanded={sidebarOpen}
+            className="text-brand-muted hover:bg-brand-border/50 rounded-full p-2 transition-colors focus-visible:ring-2 focus-visible:ring-brand-primary outline-none"
+          >
+            <Menu size={20} />
+          </button>
+          {sidebarOpen && (
+            <Link to="/" className="text-xl font-medium font-inter text-brand-ink truncate">
+              <span className="text-brand-primary font-bold mr-0.5 text-2xl">V</span>endor360
+            </Link>
+          )}
         </div>
-        <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
-          {navItems.map(item => {
+
+        <nav className="flex-1 px-3 py-2 space-y-1 overflow-y-auto" aria-label="Main">
+          {allNav.map((item) => {
             const isActive = path === item.path;
             return (
-              <Link 
-                key={item.name} 
-                to={item.path} 
-                className={`flex items-center space-x-3 px-4 py-3 rounded-xl transition-all ${
-                  isActive 
-                    ? 'bg-brand-teal/10 text-brand-teal font-bold shadow-sm border border-brand-teal/20' 
-                    : 'text-brand-muted hover:bg-brand-bg hover:text-brand-ink font-semibold border border-transparent'
+              <Link
+                key={item.path}
+                to={item.path}
+                title={sidebarOpen ? undefined : item.name}
+                aria-current={isActive ? 'page' : undefined}
+                className={`flex items-center gap-4 px-4 py-3 rounded-full transition-all focus-visible:ring-2 focus-visible:ring-brand-primary outline-none ${
+                  isActive
+                    ? 'bg-brand-primary/10 text-brand-primary font-semibold'
+                    : 'text-brand-ink hover:bg-brand-border/50 font-medium'
                 }`}
               >
-                <item.icon size={20} />
-                <span>{item.name}</span>
+                <item.icon size={21} className={isActive ? 'text-brand-primary' : 'text-brand-muted'} />
+                {sidebarOpen && <span className="truncate">{item.name}</span>}
               </Link>
             );
           })}
         </nav>
       </aside>
 
-      {/* MAIN CONTENT WRAPPER */}
-      <div className="flex-1 flex flex-col min-w-0 relative">
-        
-        {/* HEADER */}
-        <header className="bg-brand-teal/90 backdrop-blur-md text-white px-4 py-3 md:py-4 md:px-8 sticky top-0 z-30 shadow-md flex justify-between items-center transition-colors">
+      <div className="flex-1 flex flex-col min-w-0 relative bg-brand-surface md:rounded-tl-3xl md:m-2 md:ml-0 md:shadow-[0_4px_16px_rgba(0,0,0,0.05)] overflow-hidden border border-brand-border/40">
+        <header className="bg-brand-surface text-brand-ink px-4 py-2 md:py-3 md:px-6 sticky top-0 z-30 flex justify-between items-center border-b border-brand-border/30">
           <div className="md:hidden">
-            <Link to="/" className="block">
-              <h1 className="font-semibold text-lg leading-tight">Vendor360</h1>
-              <p className="text-[10px] text-white/80">{t('dashboard.title')}</p>
+            <Link to="/" className="font-medium text-lg font-inter tracking-tight">
+              <span className="text-brand-primary font-bold">V</span>endor360
             </Link>
           </div>
-          <div className="hidden md:block">
-             <h2 className="font-bold text-xl font-poppins opacity-90">{t('dashboard.title')}</h2>
+          <div className="hidden md:block min-w-0">
+            <h1 className="font-medium text-lg font-inter text-brand-ink truncate">
+              {allNav.find((item) => item.path === path)?.name || storeName}
+            </h1>
           </div>
 
-          <div className="flex items-center space-x-3 md:space-x-4">
-            <Link to="/app/notifications" className="p-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors relative">
-              <Bell size={18} />
-              <span className="absolute top-1 right-1 w-2 h-2 bg-brand-danger rounded-full border border-brand-teal"></span>
+          <div className="flex items-center gap-1 md:gap-2">
+            <Link
+              to="/app/notifications"
+              aria-label={alertCount ? `Alerts, ${alertCount} items need attention` : 'Alerts'}
+              className="p-2 rounded-full text-brand-muted hover:bg-brand-bg transition-colors relative focus-visible:ring-2 focus-visible:ring-brand-primary outline-none"
+            >
+              <Bell size={21} />
+              {alertCount > 0 && (
+                <span className="absolute top-1.5 right-1.5 min-w-[16px] h-4 px-1 bg-brand-danger text-white text-[9px] font-bold rounded-full border-2 border-brand-surface flex items-center justify-center">
+                  {alertCount > 9 ? '9+' : alertCount}
+                </span>
+              )}
             </Link>
-            <button onClick={toggleTheme} className="p-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors">
-              {isDark ? <Sun size={18} /> : <Moon size={18} />}
+            <button
+              onClick={toggle}
+              aria-label={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
+              className="p-2 rounded-full text-brand-muted hover:bg-brand-bg transition-colors focus-visible:ring-2 focus-visible:ring-brand-primary outline-none"
+            >
+              {isDark ? <Sun size={21} /> : <Moon size={21} />}
             </button>
-            <Link to="/app/account" className="w-9 h-9 md:w-10 md:h-10 rounded-full bg-white/20 flex items-center justify-center text-sm md:text-base font-bold shadow-sm hover:scale-105 transition-transform border border-white/30">
-              ME
+            <Link
+              to="/app/account"
+              title={displayName}
+              aria-label="Account"
+              className="ml-1 w-9 h-9 rounded-full bg-brand-primary text-brand-on-primary flex items-center justify-center text-sm font-bold hover:bg-brand-primary-dark transition-colors focus-visible:ring-2 focus-visible:ring-brand-primary outline-none"
+            >
+              {initials}
             </Link>
           </div>
         </header>
 
-        {/* PAGE CONTENT */}
-        <main className="flex-1 overflow-y-auto p-4 md:p-8 pb-24 md:pb-8">
+        <main className="flex-1 overflow-y-auto p-4 md:p-8 pb-28 md:pb-8 bg-brand-surface">
           <div className="max-w-5xl mx-auto h-full">
             <Routes>
               <Route path="/" element={<Dashboard />} />
+              <Route path="/billing" element={<Billing />} />
               <Route path="/khata" element={<KhataDashboard />} />
               <Route path="/log" element={<VoiceEntry />} />
               <Route path="/stock" element={<Inventory />} />
@@ -146,25 +196,74 @@ function AppLayout() {
               <Route path="/account" element={<Account />} />
               <Route path="/heatmap" element={<Heatmap />} />
               <Route path="/notifications" element={<Notifications />} />
+              <Route path="*" element={<Navigate to="/app" replace />} />
             </Routes>
           </div>
         </main>
 
-        {/* MOBILE BOTTOM NAV */}
-        <div className="md:hidden fixed bottom-0 w-full bg-brand-surface/90 backdrop-blur-md border-t border-brand-border px-2 py-2 flex justify-between items-center z-40 shadow-[0_-4px_20px_rgba(0,0,0,0.05)] transition-colors">
-          {navItems.filter(i => i.name !== t('dashboard.heatmap') && i.name !== t('nav.score')).map((item) => {
+        {/* Mobile nav. Overflow items live behind "More" instead of being
+            filtered out by their translated label, which left Score and Heatmap
+            unreachable on a phone -- and broke entirely in Hindi. */}
+        <nav
+          className="md:hidden fixed bottom-0 inset-x-0 bg-brand-bg border-t border-brand-border px-1 py-2 flex justify-around items-center z-30"
+          aria-label="Main"
+        >
+          {primaryNav.map((item) => {
             const isActive = path === item.path;
             return (
-              <Link key={item.name} to={item.path} className="flex flex-col items-center p-2 flex-1">
-                <item.icon size={22} className={isActive ? 'text-brand-teal' : 'text-brand-muted'} />
-                <span className={`text-[9px] mt-1 ${isActive ? 'text-brand-teal font-bold' : 'text-brand-muted font-medium'}`}>
+              <Link
+                key={item.path}
+                to={item.path}
+                aria-current={isActive ? 'page' : undefined}
+                className="flex flex-col items-center flex-1 focus-visible:ring-2 focus-visible:ring-brand-primary outline-none rounded-lg py-0.5"
+              >
+                <span className={`px-4 py-1 rounded-full transition-colors ${isActive ? 'bg-brand-primary/20' : ''}`}>
+                  <item.icon size={21} className={isActive ? 'text-brand-primary' : 'text-brand-muted'} />
+                </span>
+                <span className={`text-[10px] mt-0.5 font-medium ${isActive ? 'text-brand-ink' : 'text-brand-muted'}`}>
                   {item.name}
                 </span>
               </Link>
             );
           })}
-        </div>
+          <button
+            onClick={() => setMoreOpen(true)}
+            aria-label="More pages"
+            className="flex flex-col items-center flex-1 focus-visible:ring-2 focus-visible:ring-brand-primary outline-none rounded-lg py-0.5"
+          >
+            <span className="px-4 py-1 rounded-full">
+              <MoreHorizontal size={21} className="text-brand-muted" />
+            </span>
+            <span className="text-[10px] mt-0.5 font-medium text-brand-muted">More</span>
+          </button>
+        </nav>
 
+        {moreOpen && (
+          <div className="md:hidden fixed inset-0 bg-black/50 z-40 flex items-end" onClick={() => setMoreOpen(false)}>
+            <div className="bg-brand-surface w-full rounded-t-3xl p-5 pb-8" onClick={(e) => e.stopPropagation()}>
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="font-bold text-brand-ink">More</h2>
+                <button onClick={() => setMoreOpen(false)} aria-label="Close" className="text-brand-muted p-1">
+                  <X size={20} />
+                </button>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                {secondaryNav.map((item) => (
+                  <Link
+                    key={item.path}
+                    to={item.path}
+                    className="flex flex-col items-center gap-2 p-4 rounded-2xl bg-brand-bg border border-brand-border"
+                  >
+                    <item.icon size={22} className="text-brand-primary" />
+                    <span className="text-[11px] font-semibold text-brand-ink text-center leading-tight">
+                      {item.name}
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -172,15 +271,23 @@ function AppLayout() {
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/" element={<Landing />} />
-      <Route path="/legal" element={<Legal />} />
-      <Route path="/auth" element={<Auth />} />
-      <Route path="/app/*" element={
-        <ProtectedRoute>
-          <AppLayout />
-        </ProtectedRoute>
-      } />
-    </Routes>
+    <ToastProvider>
+      <AuthProvider>
+        <Routes>
+          <Route path="/" element={<Landing />} />
+          <Route path="/legal" element={<Legal />} />
+          <Route path="/auth" element={<Auth />} />
+          <Route
+            path="/app/*"
+            element={
+              <ProtectedRoute>
+                <AppLayout />
+              </ProtectedRoute>
+            }
+          />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </AuthProvider>
+    </ToastProvider>
   );
 }

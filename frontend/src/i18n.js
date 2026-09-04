@@ -52,6 +52,7 @@ const resources = {
       },
       nav: {
         home: "Home",
+        billing: "Billing",
         log: "Log",
         stock: "Stock",
         khata: "Khata",
@@ -110,6 +111,8 @@ const resources = {
       },
       nav: {
         home: "होम",
+        billing: "बिलिंग",
+        billing: "बिलिंग",
         log: "लॉग",
         stock: "स्टॉक",
         khata: "खाता",

@@ -1,59 +1,50 @@
-import { useState, useEffect } from 'react';
-import axios from 'axios';
-import { Bell, Activity, Clock } from 'lucide-react';
-import { useTranslation } from 'react-i18next';
+import { Activity, Bell } from 'lucide-react';
+import { useApi } from '../hooks/useApi';
+import { relativeTime } from '../lib/format';
+import { CardSkeleton, EmptyState, ErrorState } from '../components/States';
 
 export default function Notifications() {
-  const [logs, setLogs] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const { t } = useTranslation();
-
-  useEffect(() => {
-    const fetchLogs = async () => {
-      try {
-        const authData = JSON.parse(localStorage.getItem('vendor_auth') || sessionStorage.getItem('vendor_auth'));
-        const res = await axios.get(`http://127.0.0.1:8000/api/analytics/activities/${authData?.vendor_id}`);
-        setLogs(res.data);
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchLogs();
-  }, []);
+  const { data, loading, error, reload } = useApi('/analytics/activities', { params: { limit: 30 } });
 
   return (
-    <div className="space-y-6 pb-4 max-w-2xl mx-auto">
-      <div className="flex items-center space-x-2">
-        <Bell className="text-brand-teal" size={24} />
+    <div className="space-y-5 pb-6 max-w-2xl mx-auto">
+      <div className="flex items-center gap-2.5">
+        <Bell className="text-brand-primary" size={22} />
         <div>
-          <h2 className="text-lg font-bold text-brand-ink">{t('dashboard.alerts') || 'Activity Feed'}</h2>
-          <p className="text-xs text-brand-muted">Recent events in your store</p>
+          <h2 className="text-xl font-bold text-brand-ink font-inter">Activity</h2>
+          <p className="text-xs text-brand-muted">Everything that happened in your store</p>
         </div>
       </div>
 
       {loading ? (
-        <p className="text-center text-brand-muted py-10 animate-pulse">Loading feed...</p>
+        <CardSkeleton rows={4} />
+      ) : error ? (
+        <ErrorState message={error} onRetry={reload} />
+      ) : !data?.length ? (
+        <EmptyState
+          icon={Activity}
+          title="Nothing has happened yet"
+          description="Sales, stock changes and khata entries will all show up here as you use the app."
+        />
       ) : (
-        <div className="space-y-3">
-          {logs.map((log, index) => (
-            <div key={log.id} className="bg-brand-surface rounded-xl p-4 border border-brand-border shadow-sm flex items-start space-x-3 transition-colors">
-              <div className="bg-brand-bg p-2 rounded-lg text-brand-teal mt-0.5">
-                <Activity size={18} />
+        <ul className="space-y-3">
+          {data.map((log) => (
+            <li key={log.id} className="bg-brand-surface rounded-2xl p-4 border border-brand-border shadow-sm flex items-start gap-3">
+              <div className="bg-brand-bg p-2 rounded-lg text-brand-primary mt-0.5 shrink-0">
+                <Activity size={17} />
               </div>
-              <div className="flex-1">
-                <div className="flex justify-between items-start">
+              <div className="flex-1 min-w-0">
+                <div className="flex justify-between items-start gap-2">
                   <h3 className="text-sm font-bold text-brand-ink">{log.action}</h3>
-                  <span className="text-[10px] text-brand-muted flex items-center font-semibold uppercase tracking-wider">
-                    <Clock size={10} className="mr-1" /> {log.time}
-                  </span>
+                  <time className="text-[10px] text-brand-muted font-semibold uppercase tracking-wider shrink-0" dateTime={log.created_at}>
+                    {relativeTime(log.created_at)}
+                  </time>
                 </div>
                 <p className="text-xs text-brand-muted mt-1 leading-relaxed">{log.details}</p>
               </div>
-            </div>
+            </li>
           ))}
-        </div>
+        </ul>
       )}
     </div>
   );

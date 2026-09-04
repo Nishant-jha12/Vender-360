@@ -1,163 +1,201 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
-from database import get_db
-import models
-from pydantic import BaseModel
+"""Digital khata: customers and their running credit balance."""
 from typing import List, Optional
-from datetime import datetime
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session, joinedload
+
+import models
+import schemas
+import security
+from database import get_db
 
 router = APIRouter()
 
-class CustomerCreate(BaseModel):
-    name: str
-    phone: Optional[str] = None
-    vendor_id: Optional[str] = None
-    initial_credit_balance: Optional[float] = 0.0
 
-class TransactionCreate(BaseModel):
-    amount: float
-    transaction_type: str  # 'credit' (add udhaar) or 'payment' (settlement)
-    notes: Optional[str] = None
-
-class TransactionResponse(BaseModel):
-    id: str
-    customer_id: str
-    amount: float
-    transaction_type: str
-    date: datetime
-    notes: Optional[str] = None
-
-    class Config:
-        from_attributes = True
-
-class CustomerResponse(BaseModel):
-    id: str
-    name: str
-    phone: Optional[str]
-    total_credit_balance: float
-    created_at: datetime
-    khata_transactions: List[TransactionResponse] = []
-
-    class Config:
-        from_attributes = True
-
-@router.post("/customers", response_model=CustomerResponse)
-@router.post("/api/customers", response_model=CustomerResponse)
-def create_customer(req: CustomerCreate, db: Session = Depends(get_db)):
-    # Fallback to first vendor if none provided
-    vendor_id = req.vendor_id
-    if not vendor_id:
-        first_vendor = db.query(models.Vendor).first()
-        vendor_id = first_vendor.id if first_vendor else None
-
-    customer = models.Customer(
-        name=req.name,
-        phone=req.phone,
-        vendor_id=vendor_id,
-        total_credit_balance=req.initial_credit_balance or 0.0
+def _owned_customer(customer_id: str, vendor: models.Vendor, db: Session) -> models.Customer:
+    customer = (
+        db.query(models.Customer)
+        .filter(models.Customer.id == customer_id, models.Customer.vendor_id == vendor.id)
+        .first()
     )
-    db.add(customer)
-    db.commit()
-    db.refresh(customer)
-    
-    # If initial credit > 0, log an initial transaction
-    if req.initial_credit_balance and req.initial_credit_balance > 0:
-        tx = models.KhataTransaction(
-            customer_id=customer.id,
-            amount=req.initial_credit_balance,
-            transaction_type="credit",
-            notes="Initial credit balance"
-        )
-        db.add(tx)
-        
-        if vendor_id:
-            log = models.ActivityLog(
-                vendor_id=vendor_id,
-                action="Khata Initial Credit",
-                details=f"Opened Khata account for {customer.name} with Rs {req.initial_credit_balance} credit."
-            )
-            db.add(log)
-            
-        db.commit()
-        db.refresh(customer)
-
-    return customer
-
-@router.get("/customers", response_model=List[CustomerResponse])
-@router.get("/api/customers", response_model=List[CustomerResponse])
-def get_customers(vendor_id: Optional[str] = None, db: Session = Depends(get_db)):
-    query = db.query(models.Customer)
-    if vendor_id:
-        query = query.filter(models.Customer.vendor_id == vendor_id)
-    customers = query.order_by(models.Customer.total_credit_balance.desc()).all()
-    
-    # If database has no customers, populate with default sample kirana customers for preview
-    if not customers:
-        default_vendor = db.query(models.Vendor).first()
-        v_id = vendor_id or (default_vendor.id if default_vendor else None)
-        
-        sample_customers = [
-            models.Customer(vendor_id=v_id, name="Ramesh Kumar (Flat 402)", phone="+91 98231 44120", total_credit_balance=1450.0),
-            models.Customer(vendor_id=v_id, name="Sunita Verma", phone="+91 97110 52319", total_credit_balance=620.0),
-            models.Customer(vendor_id=v_id, name="Amit Patel (Shop #4)", phone="+91 99882 10924", total_credit_balance=3100.0),
-            models.Customer(vendor_id=v_id, name="Pooja Sharma", phone="+91 98450 11982", total_credit_balance=0.0),
-        ]
-        db.add_all(sample_customers)
-        db.commit()
-        
-        # Add sample transactions
-        for c in sample_customers:
-            if c.total_credit_balance > 0:
-                db.add(models.KhataTransaction(
-                    customer_id=c.id,
-                    amount=c.total_credit_balance,
-                    transaction_type="credit",
-                    notes="Previous week grocery credit"
-                ))
-        db.commit()
-        customers = query.order_by(models.Customer.total_credit_balance.desc()).all()
-
-    return customers
-
-@router.post("/khata/{customer_id}/transaction", response_model=CustomerResponse)
-@router.post("/api/khata/{customer_id}/transaction", response_model=CustomerResponse)
-def add_khata_transaction(customer_id: str, req: TransactionCreate, db: Session = Depends(get_db)):
-    customer = db.query(models.Customer).filter(models.Customer.id == customer_id).first()
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
+    return customer
 
-    if req.amount <= 0:
-        raise HTTPException(status_code=400, detail="Transaction amount must be greater than zero")
 
-    # Update balance
-    if req.transaction_type.lower() == "credit":
-        customer.total_credit_balance += req.amount
-        action_name = "Khata Credit Given"
-        detail_msg = f"Added Rs {req.amount} credit for {customer.name} ({req.notes or 'Udhaar'})"
-    elif req.transaction_type.lower() == "payment":
-        customer.total_credit_balance = max(0.0, customer.total_credit_balance - req.amount)
-        action_name = "Khata Payment Received"
-        detail_msg = f"Recorded Rs {req.amount} settlement payment from {customer.name}"
-    else:
-        raise HTTPException(status_code=400, detail="Invalid transaction_type. Must be 'credit' or 'payment'")
-
-    transaction = models.KhataTransaction(
-        customer_id=customer.id,
-        amount=req.amount,
-        transaction_type=req.transaction_type.lower(),
-        notes=req.notes
+@router.get("/customers", response_model=List[schemas.CustomerResponse])
+def list_customers(
+    search: Optional[str] = Query(None, max_length=120),
+    vendor: models.Vendor = Depends(security.get_current_vendor),
+    db: Session = Depends(get_db),
+):
+    """Read-only. The previous version inserted four invented customers when the
+    table was empty, so a real shopkeeper's first login showed strangers owing
+    them money. Sample data now lives behind POST /api/demo/seed."""
+    query = (
+        db.query(models.Customer)
+        .options(joinedload(models.Customer.khata_transactions))
+        .filter(models.Customer.vendor_id == vendor.id)
     )
-    db.add(transaction)
+    if search:
+        pattern = f"%{search.strip()}%"
+        query = query.filter(models.Customer.name.ilike(pattern) | models.Customer.phone.ilike(pattern))
 
-    # Activity log
-    if customer.vendor_id:
-        log = models.ActivityLog(
-            vendor_id=customer.vendor_id,
-            action=action_name,
-            details=detail_msg
+    return query.order_by(models.Customer.total_credit_balance.desc()).all()
+
+
+@router.post("/customers", response_model=schemas.CustomerResponse, status_code=201)
+def create_customer(
+    req: schemas.CustomerCreate,
+    vendor: models.Vendor = Depends(security.get_current_vendor),
+    db: Session = Depends(get_db),
+):
+    customer = models.Customer(
+        vendor_id=vendor.id,
+        name=req.name.strip(),
+        phone=(req.phone or "").strip() or None,
+        total_credit_balance=req.initial_credit_balance,
+    )
+    db.add(customer)
+    db.flush()
+
+    if req.initial_credit_balance > 0:
+        db.add(
+            models.KhataTransaction(
+                customer_id=customer.id,
+                amount=req.initial_credit_balance,
+                transaction_type="credit",
+                notes="Opening balance",
+            )
         )
-        db.add(log)
+        db.add(
+            models.ActivityLog(
+                vendor_id=vendor.id,
+                action="Khata opened",
+                details=f"{customer.name} opened with Rs {req.initial_credit_balance:.2f} outstanding.",
+            )
+        )
 
     db.commit()
     db.refresh(customer)
     return customer
+
+
+@router.get("/customers/{customer_id}", response_model=schemas.CustomerResponse)
+def get_customer(
+    customer_id: str,
+    vendor: models.Vendor = Depends(security.get_current_vendor),
+    db: Session = Depends(get_db),
+):
+    return _owned_customer(customer_id, vendor, db)
+
+
+@router.delete("/customers/{customer_id}", status_code=204)
+def delete_customer(
+    customer_id: str,
+    vendor: models.Vendor = Depends(security.get_current_vendor),
+    db: Session = Depends(get_db),
+):
+    customer = _owned_customer(customer_id, vendor, db)
+    if (customer.total_credit_balance or 0) > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{customer.name} still owes Rs {customer.total_credit_balance:.2f}. Settle the balance first.",
+        )
+    db.delete(customer)
+    db.commit()
+    return None
+
+
+@router.post("/customers/{customer_id}/transaction", response_model=schemas.CustomerResponse)
+def add_transaction(
+    customer_id: str,
+    req: schemas.TransactionCreate,
+    vendor: models.Vendor = Depends(security.get_current_vendor),
+    db: Session = Depends(get_db),
+):
+    customer = _owned_customer(customer_id, vendor, db)
+    balance = customer.total_credit_balance or 0.0
+
+    if req.transaction_type == "credit":
+        customer.total_credit_balance = round(balance + req.amount, 2)
+        action = "Credit given"
+        detail = f"Rs {req.amount:.2f} udhaar to {customer.name}"
+    else:
+        # Overpayments used to be swallowed by max(0.0, balance - amount): pay
+        # Rs 2000 against Rs 1450 and Rs 550 of the customer's money vanished.
+        # A negative balance now correctly means the shop is holding an advance.
+        customer.total_credit_balance = round(balance - req.amount, 2)
+        action = "Payment received"
+        detail = f"Rs {req.amount:.2f} settled by {customer.name}"
+        if customer.total_credit_balance < 0:
+            detail += f" (Rs {abs(customer.total_credit_balance):.2f} held as advance)"
+
+    db.add(
+        models.KhataTransaction(
+            customer_id=customer.id,
+            amount=req.amount,
+            transaction_type=req.transaction_type,
+            notes=req.notes,
+        )
+    )
+    db.add(models.ActivityLog(vendor_id=vendor.id, action=action, details=detail))
+
+    db.commit()
+    db.refresh(customer)
+    return customer
+
+
+@router.get("/customers/{customer_id}/reminder")
+def payment_reminder(
+    customer_id: str,
+    vendor: models.Vendor = Depends(security.get_current_vendor),
+    db: Session = Depends(get_db),
+):
+    """Build a WhatsApp reminder link for an outstanding balance.
+
+    wa.me needs no API key and no cost, and WhatsApp is how this money actually
+    gets chased in practice.
+    """
+    customer = _owned_customer(customer_id, vendor, db)
+    balance = customer.total_credit_balance or 0.0
+    if balance <= 0:
+        raise HTTPException(status_code=400, detail=f"{customer.name} has nothing outstanding")
+
+    oldest = (
+        db.query(models.KhataTransaction)
+        .filter(
+            models.KhataTransaction.customer_id == customer.id,
+            models.KhataTransaction.transaction_type == "credit",
+        )
+        .order_by(models.KhataTransaction.date.asc())
+        .first()
+    )
+    since = oldest.date.strftime("%d %b") if oldest else None
+
+    message = (
+        f"Namaste {customer.name}, "
+        f"this is a gentle reminder from {vendor.store_name}. "
+        f"Your pending balance is Rs {balance:.2f}"
+        + (f" (since {since})" if since else "")
+        + "."
+    )
+    if vendor.upi_id:
+        message += f" You can pay by UPI to {vendor.upi_id}. Thank you!"
+    else:
+        message += " Thank you!"
+
+    digits = "".join(ch for ch in (customer.phone or "") if ch.isdigit())
+    if not digits:
+        raise HTTPException(status_code=400, detail=f"No phone number saved for {customer.name}")
+    if len(digits) == 10:
+        digits = "91" + digits  # assume India when no country code is stored
+
+    return {
+        "customer_name": customer.name,
+        "balance": round(balance, 2),
+        "message": message,
+        "whatsapp_url": f"https://wa.me/{digits}?text={quote(message)}",
+        "sms_url": f"sms:+{digits}?body={quote(message)}",
+    }

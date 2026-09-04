@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import { api } from '../lib/api';
+import { DemoNotice } from '../components/States';
 import { 
   Flame, TrendingUp, Map as MapIcon, Crosshair, Loader2, Search, 
   ExternalLink, Navigation, Layers, Sparkles, Filter, Store, IndianRupee,
@@ -33,31 +35,26 @@ function MapClickHandler({ onMapClick, enabled }) {
 
 // Available Real Map Styles (including authentic Google Maps & Live Traffic layers)
 const MAP_STYLES = {
-  google_roadmap: {
-    name: 'Google Road',
-    url: 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
-    attribution: '&copy; Google Maps'
+  osm: {
+    name: 'Streets',
+    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '&copy; OpenStreetMap contributors',
   },
-  google_traffic: {
-    name: 'Google Traffic',
-    url: 'https://mt1.google.com/vt/lyrs=m,traffic&x={x}&y={y}&z={z}',
-    attribution: '&copy; Google Maps Live Traffic'
-  },
-  google_hybrid: {
-    name: 'Google Satellite',
-    url: 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
-    attribution: '&copy; Google Maps Satellite'
-  },
-  google_terrain: {
-    name: 'Google Terrain',
-    url: 'https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}',
-    attribution: '&copy; Google Maps Terrain'
+  carto_light: {
+    name: 'Light',
+    url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+    attribution: '&copy; CARTO &copy; OpenStreetMap contributors',
   },
   carto_dark: {
-    name: 'Dark SaaS',
+    name: 'Dark',
     url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-    attribution: '&copy; CartoDB & OSM'
-  }
+    attribution: '&copy; CARTO &copy; OpenStreetMap contributors',
+  },
+  topo: {
+    name: 'Terrain',
+    url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+    attribution: '&copy; OpenTopoMap &copy; OpenStreetMap contributors',
+  },
 };
 
 const POPULAR_CITIES = [
@@ -82,7 +79,7 @@ export default function Heatmap() {
   const [loading, setLoading] = useState(true);
   const [locating, setLocating] = useState(false);
   const [centerPosition, setCenterPosition] = useState([18.5204, 73.8567]);
-  const [activeStyle, setActiveStyle] = useState('google_roadmap');
+  const [activeStyle, setActiveStyle] = useState('osm');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [radiusKm, setRadiusKm] = useState(3.0);
   const [searchQuery, setSearchQuery] = useState('');
@@ -93,11 +90,8 @@ export default function Heatmap() {
   const fetchHeatmapData = async (lat, lng, category = selectedCategory, rKm = radiusKm) => {
     setLoading(true);
     try {
-      const authData = JSON.parse(localStorage.getItem('vendor_auth') || sessionStorage.getItem('vendor_auth'));
-      const vendorId = authData?.vendor_id || 'test';
-      const res = await axios.get(`http://127.0.0.1:8000/api/analytics/heatmap`, {
+      const res = await api.get('/analytics/heatmap', {
         params: {
-          vendor_id: vendorId,
           lat: lat,
           lng: lng,
           category: category !== 'all' ? category : undefined,
@@ -208,19 +202,26 @@ export default function Heatmap() {
   return (
     <div className="space-y-4 md:space-y-6 pb-6">
       
-      {/* Top Banner with Google Maps Sync Controls */}
+      <DemoNotice>
+        <strong>Sample data.</strong> The demand zones, wholesalers, competitors
+        and catchment figures below are illustrative examples, not measurements
+        of your area. The map itself is real; the overlays are placeholders
+        until a hyperlocal data source is connected.
+      </DemoNotice>
+
+      {/* Map controls */}
       <div className="bg-brand-surface rounded-3xl p-5 md:p-6 border border-brand-border shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all">
         <div>
           <div className="flex items-center space-x-2.5">
-            <div className="p-2.5 rounded-2xl bg-brand-teal/10 text-brand-teal border border-brand-teal/20">
+            <div className="p-2.5 rounded-2xl bg-brand-primary/10 text-brand-primary border border-brand-border">
               <MapIcon size={24} />
             </div>
             <div>
-              <h2 className="text-xl md:text-2xl font-extrabold text-brand-ink font-poppins">
-                Google Maps B2B Heatmap & Supply Radar
+              <h2 className="text-xl md:text-2xl font-extrabold text-brand-ink font-inter">
+                Area & Supply Radar
               </h2>
               <p className="text-xs md:text-sm text-brand-muted mt-0.5">
-                Hyperlocal consumer demand, live traffic congestion, and FMCG wholesale mandis
+                Example demand clusters and wholesale sources around a chosen point
               </p>
             </div>
           </div>
@@ -230,10 +231,10 @@ export default function Heatmap() {
         <div className="flex flex-wrap items-center gap-2">
           <button 
             onClick={() => setPinDropMode(!pinDropMode)}
-            className={`text-xs font-bold px-3.5 py-2.5 rounded-xl flex items-center space-x-1.5 transition-all shadow-sm ${
+            className={`text-xs font-bold px-3.5 py-2.5 rounded-2xl flex items-center space-x-1.5 transition-all shadow-sm ${
               pinDropMode 
                 ? 'bg-brand-amber text-brand-ink font-black border-2 border-brand-amber animate-pulse' 
-                : 'bg-brand-bg hover:bg-brand-teal/10 border border-brand-border text-brand-ink'
+                : 'bg-brand-bg hover:bg-brand-primary/10 border border-brand-border text-brand-ink'
             }`}
             title="Click anywhere on the map to relocate store"
           >
@@ -243,7 +244,7 @@ export default function Heatmap() {
 
           <button 
             onClick={() => openGoogleMapsQuery(centerPosition[0], centerPosition[1])}
-            className="bg-brand-bg hover:bg-brand-teal/10 border border-brand-border hover:border-brand-teal/30 text-brand-ink hover:text-brand-teal text-xs font-bold px-3.5 py-2.5 rounded-xl flex items-center space-x-1.5 transition-all shadow-sm"
+            className="bg-brand-bg hover:bg-brand-primary/10 border border-brand-border hover:border-brand-primary/30 text-brand-ink hover:text-brand-primary text-xs font-bold px-3.5 py-2.5 rounded-2xl flex items-center space-x-1.5 transition-all shadow-sm"
           >
             <ExternalLink size={14} />
             <span>Open in Google Maps</span>
@@ -252,7 +253,7 @@ export default function Heatmap() {
           <button 
             onClick={locateUser} 
             disabled={locating}
-            className="bg-brand-teal text-white text-xs font-bold px-4 py-2.5 rounded-xl flex items-center space-x-1.5 shadow-md hover:bg-brand-teal-dark active:scale-95 transition-all"
+            className="bg-brand-primary text-white text-xs font-bold px-4 py-2.5 rounded-2xl flex items-center space-x-1.5 shadow-md hover:bg-brand-primary-dark active:scale-95 transition-all"
           >
             {locating ? <Loader2 size={14} className="animate-spin" /> : <Crosshair size={14} />}
             <span>{locating ? 'Locating...' : 'Locate Me'}</span>
@@ -269,12 +270,12 @@ export default function Heatmap() {
             placeholder="Search any Indian locality or landmark (e.g. Bandra West Mumbai, Connaught Place Delhi, Koramangala Bengaluru, Dadar Market)..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-brand-surface border border-brand-border rounded-2xl pl-10 pr-28 py-3 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-teal shadow-sm transition-all"
+            className="w-full bg-brand-surface border border-brand-border rounded-2xl pl-10 pr-28 py-3 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-primary shadow-sm transition-all"
           />
           <button
             type="submit"
             disabled={isSearching || !searchQuery.trim()}
-            className="absolute right-2 top-2 bg-brand-teal text-white text-xs font-bold px-4 py-1.5 rounded-xl hover:bg-brand-teal-dark disabled:opacity-50 flex items-center space-x-1 shadow-sm"
+            className="absolute right-2 top-2 bg-brand-primary text-white text-xs font-bold px-4 py-1.5 rounded-2xl hover:bg-brand-primary-dark disabled:opacity-50 flex items-center space-x-1 shadow-sm"
           >
             {isSearching ? <Loader2 size={13} className="animate-spin" /> : 'Search'}
           </button>
@@ -289,7 +290,7 @@ export default function Heatmap() {
             <button
               key={idx}
               onClick={() => handleCitySelect(city)}
-              className="px-3 py-1.5 rounded-xl font-semibold bg-brand-surface border border-brand-border hover:border-brand-teal text-brand-ink shrink-0 transition-all active:scale-95 shadow-sm"
+              className="px-3 py-1.5 rounded-2xl font-semibold bg-brand-surface border border-brand-border hover:border-brand-primary text-brand-ink shrink-0 transition-all active:scale-95 shadow-sm"
             >
               {city.name}
             </button>
@@ -309,9 +310,9 @@ export default function Heatmap() {
               <button
                 key={cat.id}
                 onClick={() => handleCategorySelect(cat.id)}
-                className={`px-3 py-1.5 rounded-xl font-bold transition-all shrink-0 ${
+                className={`px-3 py-1.5 rounded-2xl font-bold transition-all shrink-0 ${
                   selectedCategory === cat.id
-                    ? 'bg-brand-teal text-white shadow-sm'
+                    ? 'bg-brand-primary text-white shadow-sm'
                     : 'bg-brand-bg text-brand-muted hover:text-brand-ink border border-brand-border'
                 }`}
               >
@@ -324,8 +325,8 @@ export default function Heatmap() {
           <div className="flex flex-wrap items-center gap-2">
             
             {/* Catchment Radius Selector */}
-            <div className="flex items-center space-x-1.5 bg-brand-bg px-2.5 py-1 rounded-xl border border-brand-border text-xs">
-              <Radio size={14} className="text-brand-teal" />
+            <div className="flex items-center space-x-1.5 bg-brand-bg px-2.5 py-1 rounded-2xl border border-brand-border text-xs">
+              <Radio size={14} className="text-brand-primary" />
               <span className="font-bold text-brand-muted text-[11px]">Radius:</span>
               {[1, 3, 5, 10].map((r) => (
                 <button
@@ -333,7 +334,7 @@ export default function Heatmap() {
                   onClick={() => handleRadiusChange(r)}
                   className={`px-2 py-0.5 rounded-md font-bold text-[11px] transition-all ${
                     radiusKm === r 
-                      ? 'bg-brand-teal text-white shadow-sm' 
+                      ? 'bg-brand-primary text-white shadow-sm' 
                       : 'text-brand-muted hover:text-brand-ink'
                   }`}
                 >
@@ -343,7 +344,7 @@ export default function Heatmap() {
             </div>
 
             {/* Google Maps Layer Selector */}
-            <div className="flex items-center space-x-1 bg-brand-bg p-1 rounded-xl border border-brand-border text-xs">
+            <div className="flex items-center space-x-1 bg-brand-bg p-1 rounded-2xl border border-brand-border text-xs">
               <Layers size={14} className="text-brand-muted ml-1 mr-0.5" />
               {Object.keys(MAP_STYLES).map((key) => (
                 <button
@@ -351,7 +352,7 @@ export default function Heatmap() {
                   onClick={() => setActiveStyle(key)}
                   className={`px-2 py-1 rounded-lg font-bold transition-all text-[11px] ${
                     activeStyle === key
-                      ? 'bg-brand-surface text-brand-teal shadow-sm border border-brand-border'
+                      ? 'bg-brand-surface text-brand-primary shadow-sm border border-brand-border'
                       : 'text-brand-muted hover:text-brand-ink'
                   }`}
                 >
@@ -423,7 +424,7 @@ export default function Heatmap() {
               radius={9}
             >
               <Popup>
-                <div className="p-1 font-poppins">
+                <div className="p-1 font-inter">
                   <div className="flex items-center space-x-1.5 text-blue-600 font-bold text-sm">
                     <Store size={16} />
                     <span>Sharma General Store</span>
@@ -465,7 +466,7 @@ export default function Heatmap() {
                 radius={7}
               >
                 <Popup>
-                  <div className="p-1 font-poppins max-w-xs">
+                  <div className="p-1 font-inter max-w-xs">
                     <div className="flex items-center space-x-1.5 text-purple-700 font-bold text-sm">
                       <Truck size={16} />
                       <span>{w.name}</span>
@@ -523,7 +524,7 @@ export default function Heatmap() {
                   radius={isHigh ? 38 : isMedium ? 26 : 16}
                 >
                   <Popup>
-                    <div className="p-1 max-w-xs font-poppins">
+                    <div className="p-1 max-w-xs font-inter">
                       <div className="flex items-center justify-between">
                         <strong className="text-sm font-bold text-gray-900">{zone.name}</strong>
                         <span 
@@ -592,9 +593,9 @@ export default function Heatmap() {
       <div className="flex items-center space-x-2 border-b border-brand-border pb-2">
         <button
           onClick={() => setActiveTab('hotspots')}
-          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+          className={`px-4 py-2 rounded-2xl text-xs font-bold transition-all ${
             activeTab === 'hotspots' 
-              ? 'bg-brand-teal text-white shadow-sm' 
+              ? 'bg-brand-primary text-white shadow-sm' 
               : 'text-brand-muted hover:text-brand-ink bg-brand-surface'
           }`}
         >
@@ -603,7 +604,7 @@ export default function Heatmap() {
 
         <button
           onClick={() => setActiveTab('wholesalers')}
-          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5 ${
+          className={`px-4 py-2 rounded-2xl text-xs font-bold transition-all flex items-center space-x-1.5 ${
             activeTab === 'wholesalers' 
               ? 'bg-purple-600 text-white shadow-sm' 
               : 'text-brand-muted hover:text-brand-ink bg-brand-surface'
@@ -615,7 +616,7 @@ export default function Heatmap() {
 
         <button
           onClick={() => setActiveTab('demographics')}
-          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5 ${
+          className={`px-4 py-2 rounded-2xl text-xs font-bold transition-all flex items-center space-x-1.5 ${
             activeTab === 'demographics' 
               ? 'bg-blue-600 text-white shadow-sm' 
               : 'text-brand-muted hover:text-brand-ink bg-brand-surface'
@@ -632,7 +633,7 @@ export default function Heatmap() {
           {data?.zones?.map(zone => {
             const isHigh = zone.intensity >= 85;
             const isMedium = zone.intensity >= 65 && zone.intensity < 85;
-            let badgeBg = isHigh ? 'bg-brand-danger/10 text-brand-danger border-brand-danger/25' : isMedium ? 'bg-brand-amber/10 text-brand-amber border-brand-amber/25' : 'bg-brand-teal/10 text-brand-teal border-brand-teal/25';
+            let badgeBg = isHigh ? 'bg-brand-danger/10 text-brand-danger border-brand-danger/25' : isMedium ? 'bg-brand-amber/10 text-brand-amber border-brand-amber/25' : 'bg-brand-primary/10 text-brand-primary border-brand-primary/25';
 
             return (
               <div 
@@ -646,7 +647,7 @@ export default function Heatmap() {
                       <span className="text-[11px] text-brand-muted">{zone.category}</span>
                     </div>
 
-                    <span className={`text-xs font-black px-2.5 py-1 rounded-xl border font-poppins ${badgeBg}`}>
+                    <span className={`text-xs font-black px-2.5 py-1 rounded-2xl border font-inter ${badgeBg}`}>
                       {zone.intensity}% Intensity
                     </span>
                   </div>
@@ -663,7 +664,7 @@ export default function Heatmap() {
                 </div>
 
                 <div className="mt-4 pt-3 border-t border-brand-border/60 flex items-center justify-between">
-                  <div className="flex items-center text-xs font-bold text-brand-teal font-poppins">
+                  <div className="flex items-center text-xs font-bold text-brand-primary font-inter">
                     <IndianRupee size={13} className="mr-0.5" />
                     <span>₹{zone.weekly_market_size_inr?.toLocaleString('en-IN')}/wk Potential</span>
                   </div>
@@ -671,14 +672,14 @@ export default function Heatmap() {
                   <div className="flex items-center space-x-2">
                     <button
                       onClick={() => setCenterPosition([zone.lat, zone.lng])}
-                      className="px-2.5 py-1.5 bg-brand-bg hover:bg-brand-teal/10 text-brand-ink hover:text-brand-teal border border-brand-border rounded-xl text-xs font-semibold transition-all"
+                      className="px-2.5 py-1.5 bg-brand-bg hover:bg-brand-primary/10 text-brand-ink hover:text-brand-primary border border-brand-border rounded-2xl text-xs font-semibold transition-all"
                     >
                       Focus
                     </button>
                     
                     <button
                       onClick={() => openGoogleMapsDirections(zone.lat, zone.lng)}
-                      className="px-3 py-1.5 bg-brand-teal text-white hover:bg-brand-teal-dark rounded-xl text-xs font-bold flex items-center space-x-1 shadow-sm transition-all"
+                      className="px-3 py-1.5 bg-brand-primary text-white hover:bg-brand-primary-dark rounded-2xl text-xs font-bold flex items-center space-x-1 shadow-sm transition-all"
                     >
                       <Navigation size={12} />
                       <span>Navigate</span>
@@ -707,7 +708,7 @@ export default function Heatmap() {
                 <h4 className="font-bold text-brand-ink text-sm md:text-base">{w.name}</h4>
                 <p className="text-xs text-brand-muted mt-1">{w.specialty}</p>
 
-                <div className="mt-3 bg-brand-bg p-2.5 rounded-xl border border-brand-border text-xs space-y-1">
+                <div className="mt-3 bg-brand-bg p-2.5 rounded-2xl border border-brand-border text-xs space-y-1">
                   <p className="text-green-700 font-bold">Wholesale Rate: {w.discount_rate}</p>
                   <p className="text-brand-muted text-[11px]">Timings: {w.open_hours}</p>
                 </div>
@@ -716,14 +717,14 @@ export default function Heatmap() {
               <div className="mt-4 pt-3 border-t border-brand-border/60 flex items-center space-x-2">
                 <a
                   href={`tel:${w.contact}`}
-                  className="flex-1 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 shadow-sm"
+                  className="flex-1 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-2xl text-xs font-bold flex items-center justify-center space-x-1.5 shadow-sm"
                 >
                   <Phone size={13} />
                   <span>Call {w.contact}</span>
                 </a>
                 <button
                   onClick={() => openGoogleMapsDirections(w.lat, w.lng)}
-                  className="p-2 bg-brand-bg hover:bg-brand-surface border border-brand-border text-brand-ink rounded-xl"
+                  className="p-2 bg-brand-bg hover:bg-brand-surface border border-brand-border text-brand-ink rounded-2xl"
                   title="Route in Google Maps"
                 >
                   <Navigation size={14} />
@@ -737,7 +738,7 @@ export default function Heatmap() {
       {/* TAB 3: DEMOGRAPHICS & MARKET POTENTIAL */}
       {activeTab === 'demographics' && (
         <div className="bg-brand-surface rounded-3xl p-6 border border-brand-border shadow-sm">
-          <h3 className="font-bold text-lg text-brand-ink font-poppins mb-1">
+          <h3 className="font-bold text-lg text-brand-ink font-inter mb-1">
             Catchment Area Demographics ({radiusKm} km Radius)
           </h3>
           <p className="text-xs text-brand-muted mb-6">
@@ -747,7 +748,7 @@ export default function Heatmap() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="bg-brand-bg p-4 rounded-2xl border border-brand-border">
               <p className="text-xs text-brand-muted uppercase font-bold tracking-wider">Estimated Households</p>
-              <p className="text-2xl font-black text-brand-teal mt-1 font-poppins">
+              <p className="text-2xl font-black text-brand-primary mt-1 font-inter">
                 {data?.demographics?.estimated_households?.toLocaleString('en-IN')}
               </p>
               <span className="text-[10px] text-brand-muted">Residential catchment</span>
@@ -755,7 +756,7 @@ export default function Heatmap() {
 
             <div className="bg-brand-bg p-4 rounded-2xl border border-brand-border">
               <p className="text-xs text-brand-muted uppercase font-bold tracking-wider">Catchment Population</p>
-              <p className="text-2xl font-black text-brand-ink mt-1 font-poppins">
+              <p className="text-2xl font-black text-brand-ink mt-1 font-inter">
                 {data?.demographics?.estimated_population?.toLocaleString('en-IN')}
               </p>
               <span className="text-[10px] text-brand-muted">Estimated consumer base</span>
@@ -763,7 +764,7 @@ export default function Heatmap() {
 
             <div className="bg-brand-bg p-4 rounded-2xl border border-brand-border">
               <p className="text-xs text-brand-muted uppercase font-bold tracking-wider">Monthly Spend Potential</p>
-              <p className="text-2xl font-black text-brand-danger mt-1 font-poppins">
+              <p className="text-2xl font-black text-brand-danger mt-1 font-inter">
                 ₹{data?.demographics?.monthly_market_potential_crores} Cr
               </p>
               <span className="text-[10px] text-brand-muted">Kirana grocery spend/mo</span>
@@ -771,7 +772,7 @@ export default function Heatmap() {
 
             <div className="bg-brand-bg p-4 rounded-2xl border border-brand-border">
               <p className="text-xs text-brand-muted uppercase font-bold tracking-wider">Nearby FMCG Mandis</p>
-              <p className="text-2xl font-black text-purple-700 mt-1 font-poppins">
+              <p className="text-2xl font-black text-purple-700 mt-1 font-inter">
                 {data?.demographics?.wholesaler_count} Mandis
               </p>
               <span className="text-[10px] text-brand-muted">Direct wholesale access</span>

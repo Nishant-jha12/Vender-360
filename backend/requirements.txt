@@ -1,4 +1,17 @@
+# Core API
 fastapi==0.103.1
-uvicorn==0.23.2
+uvicorn[standard]==0.23.2
 sqlalchemy==2.0.20
 pydantic==2.3.0
+
+# UPI QR rendering. Without these the API still starts and every other
+# endpoint works; only /api/checkout/generate-upi-qr returns 503.
+qrcode==7.4.2
+pillow==10.4.0
+
+# Tests
+pytest==7.4.4
+httpx==0.25.2
+
+# Auth deliberately uses the standard library (PBKDF2-HMAC-SHA256 for passwords,
+# HS256 JWTs built on hmac/hashlib) rather than adding bcrypt and PyJWT.

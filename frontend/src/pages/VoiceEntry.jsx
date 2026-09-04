@@ -1,132 +1,250 @@
-import { useState, useRef } from 'react';
-import { Mic, Check, X, Loader2 } from 'lucide-react';
-import axios from 'axios';
+import { useEffect, useRef, useState } from 'react';
+import { Check, Loader2, Mic, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { api, errorMessage } from '../lib/api';
+import { qty as fmtQty } from '../lib/format';
+import { useToast } from '../components/Toast';
 
+const LANG_MAP = { en: 'en-IN', hi: 'hi-IN', mr: 'mr-IN' };
+
+/**
+ * Speak a stock change, confirm it, then save.
+ *
+ * The old flow sent the transcript straight to an endpoint that took the first
+ * number it found and applied it to whichever product came back first from the
+ * database -- "sold 5 bread" added 5 milk, silently. Nothing is written now
+ * until the shopkeeper confirms what was understood.
+ */
 export default function VoiceEntry() {
-  const [isListening, setIsListening] = useState(false);
+  const { i18n } = useTranslation();
+  const toast = useToast();
+
+  const [status, setStatus] = useState('idle'); // idle | listening | interpreting | confirming | saving
   const [transcript, setTranscript] = useState('');
-  const [status, setStatus] = useState('idle'); // idle, listening, confirming, processing, success
+  const [interpretation, setInterpretation] = useState(null);
+  const [supported, setSupported] = useState(true);
   const recognitionRef = useRef(null);
 
-  const startListening = () => {
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      alert("Your browser does not support Speech Recognition.");
-      return;
-    }
-    
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    recognitionRef.current = new SpeechRecognition();
-    recognitionRef.current.continuous = false;
-    recognitionRef.current.interimResults = true;
-    recognitionRef.current.lang = 'en-IN'; // Can be mapped to hi-IN based on user pref
+  useEffect(() => {
+    setSupported(Boolean(window.SpeechRecognition || window.webkitSpeechRecognition));
+    return () => recognitionRef.current?.abort?.();
+  }, []);
 
-    recognitionRef.current.onstart = () => {
-      setIsListening(true);
+  const interpret = async (spoken) => {
+    setStatus('interpreting');
+    try {
+      const res = await api.post('/inventory/voice-entry', { transcript: spoken, commit: false });
+      setInterpretation(res.data);
+      setStatus('confirming');
+    } catch (err) {
+      toast.error(errorMessage(err));
+      setStatus('idle');
+    }
+  };
+
+  const startListening = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    // Follows the chosen app language instead of being pinned to en-IN.
+    recognition.lang = LANG_MAP[i18n.language] || 'en-IN';
+
+    recognition.onstart = () => {
       setStatus('listening');
       setTranscript('');
+      setInterpretation(null);
     };
-
-    recognitionRef.current.onresult = (event) => {
-      let finalTranscript = '';
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
-        finalTranscript += event.results[i][0].transcript;
+    recognition.onresult = (event) => {
+      let text = '';
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        text += event.results[i][0].transcript;
       }
-      setTranscript(finalTranscript);
+      setTranscript(text);
     };
-
-    recognitionRef.current.onend = () => {
-      setIsListening(false);
-      setStatus('confirming');
+    recognition.onerror = (event) => {
+      toast.error(
+        event.error === 'not-allowed'
+          ? 'Microphone access was blocked. Allow it in your browser settings.'
+          : 'Could not hear that. Try again.',
+      );
+      setStatus('idle');
     };
-
-    recognitionRef.current.start();
-  };
-
-  const stopListening = () => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-    }
-  };
-
-  const handleConfirm = async () => {
-    setStatus('processing');
-    try {
-      const authData = JSON.parse(localStorage.getItem('vendor_auth') || sessionStorage.getItem('vendor_auth'));
-      const res = await axios.post('http://127.0.0.1:8000/api/inventory/voice-entry', {
-        vendor_id: authData?.vendor_id,
-        transcript: transcript
+    recognition.onend = () => {
+      setTranscript((current) => {
+        if (current.trim()) interpret(current);
+        else setStatus('idle');
+        return current;
       });
-      alert(res.data.message);
+    };
+
+    recognitionRef.current = recognition;
+    recognition.start();
+  };
+
+  const save = async () => {
+    if (!interpretation?.item_id) return;
+    setStatus('saving');
+    try {
+      const signedQty = interpretation.qty * interpretation.direction;
+      const res = await api.post('/inventory/voice-entry', {
+        transcript,
+        commit: true,
+        item_id: interpretation.item_id,
+        qty: signedQty,
+      });
+      toast.success(`${res.data.sku_name}: now ${fmtQty(res.data.new_qty)}`);
       setStatus('idle');
       setTranscript('');
+      setInterpretation(null);
     } catch (err) {
-      alert("Error processing request: " + (err.response?.data?.detail || err.message));
+      toast.error(errorMessage(err));
       setStatus('confirming');
     }
   };
 
-  const handleCancel = () => {
+  const reset = () => {
     setStatus('idle');
     setTranscript('');
+    setInterpretation(null);
   };
 
+  const listening = status === 'listening';
+
+  if (!supported) {
+    return (
+      <div className="max-w-md mx-auto text-center py-16 px-4">
+        <Mic className="mx-auto text-brand-muted mb-4 opacity-40" size={44} />
+        <h2 className="text-lg font-bold text-brand-ink">Voice logging needs Chrome</h2>
+        <p className="text-sm text-brand-muted mt-2 leading-relaxed">
+          Your browser does not support speech recognition. Chrome on Android or
+          desktop works. You can still adjust stock by hand from the Stock page.
+        </p>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex flex-col items-center justify-center h-full pt-10 pb-20 px-4">
-      <div className="text-center mb-10">
-        <h2 className="text-xl font-bold text-brand-ink">Voice Logging</h2>
+    <div className="flex flex-col items-center pt-6 pb-24 px-4 max-w-md mx-auto">
+      <div className="text-center mb-8">
+        <h2 className="text-xl font-bold text-brand-ink font-inter">Voice logging</h2>
         <p className="text-sm text-brand-muted mt-2">
-          {status === 'idle' && "Tap the microphone and speak naturally."}
-          {status === 'listening' && "Listening... speak now."}
-          {status === 'confirming' && "Did we get this right?"}
-          {status === 'processing' && "Saving to inventory..."}
+          {status === 'idle' && 'Tap the mic and say what changed, e.g. "20 milk aaya" or "sold 5 bread".'}
+          {listening && 'Listening...'}
+          {status === 'interpreting' && 'Working out what you meant...'}
+          {status === 'confirming' && 'Check this before saving.'}
+          {status === 'saving' && 'Saving...'}
         </p>
       </div>
 
-      {/* Pulsing Mic Button */}
-      <div className="relative mb-12">
-        {isListening && (
+      <div className="relative mb-8">
+        {listening && (
           <>
-            <div className="absolute inset-0 bg-brand-amber/30 rounded-full animate-ping scale-150"></div>
-            <div className="absolute inset-0 bg-brand-amber/20 rounded-full animate-pulse scale-125"></div>
+            <span className="absolute inset-0 bg-brand-amber/30 rounded-full animate-ping scale-150" />
+            <span className="absolute inset-0 bg-brand-amber/20 rounded-full animate-pulse scale-125" />
           </>
         )}
         <button
-          onClick={isListening ? stopListening : startListening}
-          disabled={status === 'processing' || status === 'confirming'}
-          className={`relative z-10 w-24 h-24 rounded-full flex items-center justify-center shadow-lg transition-transform active:scale-95 ${
-            isListening ? 'bg-brand-amber text-white' : 'bg-brand-amber text-white'
-          } ${(status === 'processing' || status === 'confirming') ? 'opacity-50 cursor-not-allowed' : ''}`}
+          onClick={listening ? () => recognitionRef.current?.stop() : startListening}
+          disabled={status === 'interpreting' || status === 'saving'}
+          aria-label={listening ? 'Stop listening' : 'Start voice entry'}
+          className="relative z-10 w-24 h-24 rounded-full bg-brand-amber text-white flex items-center justify-center shadow-lg active:scale-95 transition-transform disabled:opacity-50 focus-visible:ring-4 focus-visible:ring-brand-amber/40 outline-none"
         >
-          <Mic size={40} />
+          {status === 'interpreting' || status === 'saving' ? (
+            <Loader2 size={38} className="animate-spin" />
+          ) : (
+            <Mic size={38} />
+          )}
         </button>
       </div>
 
-      {/* Transcript Area */}
-      <div className={`w-full max-w-sm bg-brand-surface p-5 rounded-xl border transition-all duration-300 ${transcript ? 'border-brand-amber shadow-md' : 'border-transparent bg-transparent'}`}>
-        <p className="text-center text-brand-ink text-lg min-h-[3rem] italic">
-          {transcript ? `"${transcript}"` : ""}
-        </p>
-        
-        {status === 'confirming' && transcript && (
-          <div className="flex space-x-3 mt-6">
-            <button onClick={handleCancel} className="flex-1 py-3 px-4 rounded-xl border border-brand-border text-brand-ink font-semibold flex items-center justify-center space-x-2 bg-brand-bg active:opacity-80 transition-opacity">
-              <X size={18} />
-              <span>Cancel</span>
+      {transcript && (
+        <p className="text-center text-brand-ink text-lg italic mb-5">“{transcript}”</p>
+      )}
+
+      {status === 'confirming' && interpretation && (
+        <div className="w-full bg-brand-surface border border-brand-border rounded-2xl p-5 shadow-sm">
+          {interpretation.understood ? (
+            <>
+              <p className="text-sm font-bold text-brand-ink text-center">
+                {interpretation.direction < 0 ? 'Remove' : 'Add'}{' '}
+                <span className="text-brand-primary">{fmtQty(interpretation.qty)}</span>
+                {interpretation.direction < 0 ? ' from ' : ' to '}
+                <span className="text-brand-primary">{interpretation.sku_name}</span>
+              </p>
+              <p className="text-[11px] text-brand-muted text-center mt-1.5">
+                Match confidence {Math.round(interpretation.confidence * 100)}%
+              </p>
+            </>
+          ) : (
+            <p className="text-sm font-bold text-brand-ink text-center">
+              {interpretation.message}
+            </p>
+          )}
+
+          {/* A near-miss is one tap from correct rather than a retry. */}
+          <div className="mt-4">
+            <label className="text-[11px] font-bold text-brand-muted uppercase tracking-wider">Product</label>
+            <select
+              value={interpretation.item_id || ''}
+              onChange={(e) => {
+                const chosen = interpretation.candidates.find((c) => c.id === e.target.value);
+                setInterpretation({
+                  ...interpretation,
+                  item_id: e.target.value,
+                  sku_name: chosen?.sku_name,
+                  understood: Boolean(e.target.value),
+                });
+              }}
+              className="w-full mt-1 bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-primary"
+            >
+              <option value="">Choose a product</option>
+              {interpretation.candidates?.map((candidate) => (
+                <option key={candidate.id} value={candidate.id}>
+                  {candidate.sku_name} ({fmtQty(candidate.current_qty)} in stock)
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 mt-3">
+            <label className="block">
+              <span className="text-[11px] font-bold text-brand-muted uppercase tracking-wider">Quantity</span>
+              <input
+                type="number" step="any" min="0" value={interpretation.qty}
+                onChange={(e) => setInterpretation({ ...interpretation, qty: parseFloat(e.target.value) || 0 })}
+                className="w-full mt-1 bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm font-bold text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-primary"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[11px] font-bold text-brand-muted uppercase tracking-wider">Direction</span>
+              <select
+                value={interpretation.direction}
+                onChange={(e) => setInterpretation({ ...interpretation, direction: Number(e.target.value) })}
+                className="w-full mt-1 bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-primary"
+              >
+                <option value={1}>Stock came in</option>
+                <option value={-1}>Stock went out</option>
+              </select>
+            </label>
+          </div>
+
+          <div className="flex gap-3 mt-5">
+            <button onClick={reset} className="flex-1 py-3 rounded-2xl border border-brand-border text-brand-ink font-semibold flex items-center justify-center gap-2 bg-brand-bg text-sm">
+              <X size={17} /> Cancel
             </button>
-            <button onClick={handleConfirm} className="flex-1 py-3 px-4 rounded-xl bg-brand-teal text-white font-semibold flex items-center justify-center space-x-2 active:bg-brand-teal-dark shadow-sm transition-colors">
-              <Check size={18} />
-              <span>Save</span>
+            <button
+              onClick={save}
+              disabled={!interpretation.item_id || !interpretation.qty}
+              className="flex-1 py-3 rounded-2xl bg-brand-primary text-brand-on-primary font-semibold flex items-center justify-center gap-2 text-sm disabled:opacity-50"
+            >
+              <Check size={17} /> Save
             </button>
           </div>
-        )}
-
-        {status === 'processing' && (
-          <div className="flex justify-center mt-6">
-            <Loader2 className="animate-spin text-brand-teal" size={32} />
-          </div>
-        )}
-      </div>
-
+        </div>
+      )}
     </div>
   );
 }
