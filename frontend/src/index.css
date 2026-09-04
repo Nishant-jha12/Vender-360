@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --brand-teal: 15 122 107;
+    --brand-teal-dark: 10 90 79;
+    --brand-amber: 217 138 15;
+    --brand-bg: 250 249 246;
+    --brand-surface: 255 255 255;
+    --brand-ink: 26 46 42;
+    --brand-muted: 91 107 103;
+    --brand-border: 216 228 225;
+    --brand-danger: 232 93 76;
+  }
+  .dark {
+    --brand-teal: 20 160 141;
+    --brand-teal-dark: 15 122 107;
+    --brand-amber: 242 166 48;
+    --brand-bg: 18 18 18;
+    --brand-surface: 30 30 30;
+    --brand-ink: 224 224 224;
+    --brand-muted: 153 153 153;
+    --brand-border: 60 60 60;
+    --brand-danger: 239 118 104;
+  }
+  body {
+    @apply font-poppins bg-brand-bg text-brand-ink transition-colors duration-300;
+  }
+}
