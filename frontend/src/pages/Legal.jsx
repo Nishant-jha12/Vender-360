@@ -9,14 +9,14 @@ export default function Legal() {
           <Link to="/" className="text-brand-muted hover:text-brand-ink mr-4 transition-colors">
             <ArrowLeft size={24} />
           </Link>
-          <div className="text-xl font-bold font-poppins text-brand-teal">
+          <div className="text-xl font-bold font-inter text-brand-primary">
             Vendor360 Legal
           </div>
         </div>
       </nav>
 
       <main className="max-w-4xl mx-auto px-4 py-12">
-        <h1 className="text-4xl font-extrabold mb-8 font-poppins">Terms of Service & Privacy Policy</h1>
+        <h1 className="text-4xl font-extrabold mb-8 font-inter">Terms of Service & Privacy Policy</h1>
         
         <div className="prose prose-brand max-w-none space-y-8">
           <section className="bg-brand-surface p-8 rounded-2xl border border-brand-border">

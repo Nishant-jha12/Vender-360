@@ -1,31 +1,39 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Roboto:wght@400;500;700&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   :root {
-    --brand-teal: 15 122 107;
-    --brand-teal-dark: 10 90 79;
-    --brand-amber: 217 138 15;
-    --brand-bg: 250 249 246;
+    --brand-primary: 26 115 232;
+    --brand-primary-dark: 21 88 214;
+    --brand-on-primary: 255 255 255;
+    --brand-bg: 248 249 250;
     --brand-surface: 255 255 255;
-    --brand-ink: 26 46 42;
-    --brand-muted: 91 107 103;
-    --brand-border: 216 228 225;
-    --brand-danger: 232 93 76;
+    --brand-ink: 32 33 36;
+    --brand-muted: 95 99 104;
+    --brand-border: 218 220 224;
+    --brand-danger: 217 48 37;
+    --brand-amber: 249 171 0;
+    --brand-success: 24 128 56;
   }
   .dark {
-    --brand-teal: 20 160 141;
-    --brand-teal-dark: 15 122 107;
-    --brand-amber: 242 166 48;
-    --brand-bg: 18 18 18;
-    --brand-surface: 30 30 30;
-    --brand-ink: 224 224 224;
-    --brand-muted: 153 153 153;
-    --brand-border: 60 60 60;
-    --brand-danger: 239 118 104;
+    --brand-primary: 138 180 248;
+    --brand-primary-dark: 168 199 250;
+    --brand-on-primary: 32 33 36;
+    --brand-bg: 32 33 36;
+    --brand-surface: 41 42 45;
+    --brand-ink: 232 234 237;
+    --brand-muted: 154 160 166;
+    --brand-border: 60 64 67;
+    --brand-danger: 242 139 130;
+    --brand-amber: 253 214 99;
+    --brand-success: 129 201 149;
   }
   body {
-    @apply font-poppins bg-brand-bg text-brand-ink transition-colors duration-300;
+    @apply font-roboto bg-brand-bg text-brand-ink transition-colors duration-300;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-inter;
   }
 }

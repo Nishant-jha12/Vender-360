@@ -1,54 +1,74 @@
-from fastapi import APIRouter, HTTPException, Query
-import qrcode
-import io
+"""UPI QR generation for counter payments.
+
+The QR is built against the signed-in vendor's own UPI ID. It used to default to
+a single hardcoded VPA, which meant every store's QR collected money into the
+same account.
+"""
 import base64
-from urllib.parse import quote
+import io
 from typing import Optional
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+import models
+import security
 
 router = APIRouter()
 
-@router.get("/checkout/generate-upi-qr")
-@router.get("/api/checkout/generate-upi-qr")
+# Imported lazily so a missing optional dependency degrades to one clean 503 on
+# this endpoint instead of crashing the whole API at startup.
+try:
+    import qrcode
+
+    QR_AVAILABLE = True
+    QR_IMPORT_ERROR = ""
+except ImportError as exc:  # pragma: no cover
+    QR_AVAILABLE = False
+    QR_IMPORT_ERROR = str(exc)
+
+
+@router.get("/generate-upi-qr")
 def generate_upi_qr(
-    amount: float = Query(..., description="Amount in INR to be paid", gt=0),
-    store_upi_id: str = Query("vendor360@okaxis", description="Merchant UPI ID (VPA)"),
-    store_name: Optional[str] = Query("Sharma General Store", description="Store Name"),
-    note: Optional[str] = Query("Vendor360 Instant Checkout", description="Transaction Note/Description")
+    amount: float = Query(..., description="Amount in INR", gt=0, le=100000),
+    note: Optional[str] = Query(None, max_length=80),
+    vendor: models.Vendor = Depends(security.get_current_vendor),
 ):
-    if amount <= 0:
-        raise HTTPException(status_code=400, detail="Amount must be greater than 0")
-
-    # Standard NPCI UPI URI Specification
-    # upi://pay?pa={vpa}&pn={payee_name}&am={amount}&cu=INR&tn={transaction_note}
-    encoded_name = quote(store_name)
-    encoded_note = quote(note)
-    upi_intent_url = f"upi://pay?pa={store_upi_id}&pn={encoded_name}&am={amount:.2f}&cu=INR&tn={encoded_note}"
-
-    try:
-        # Generate QR code with high error correction and clean styling
-        qr = qrcode.QRCode(
-            version=1,
-            error_correction=qrcode.constants.ERROR_CORRECT_M,
-            box_size=10,
-            border=2,
+    if not vendor.upi_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Add your UPI ID under Account before collecting UPI payments.",
         )
-        qr.add_data(upi_intent_url)
-        qr.make(fit=True)
 
-        img = qr.make_image(fill_color="#0F7A6B", back_color="#FFFFFF")
-        
-        buffer = io.BytesIO()
-        img.save(buffer, format="PNG")
-        qr_base64_str = base64.b64encode(buffer.getvalue()).decode("utf-8")
-        data_uri = f"data:image/png;base64,{qr_base64_str}"
+    # NPCI UPI deep-link spec:
+    # upi://pay?pa={vpa}&pn={payee}&am={amount}&cu=INR&tn={note}
+    upi_url = (
+        f"upi://pay?pa={quote(vendor.upi_id)}"
+        f"&pn={quote(vendor.store_name)}"
+        f"&am={amount:.2f}&cu=INR"
+        f"&tn={quote(note or 'Store purchase')}"
+    )
 
-        return {
-            "status": "success",
-            "amount": amount,
-            "store_upi_id": store_upi_id,
-            "store_name": store_name,
-            "upi_url": upi_intent_url,
-            "qr_base64": data_uri
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to generate UPI QR code: {str(e)}")
+    if not QR_AVAILABLE:
+        # The link still works even when the image cannot be rendered, so the
+        # client can fall back to the "open in UPI app" button.
+        raise HTTPException(
+            status_code=503,
+            detail="QR rendering needs the 'qrcode' package: pip install -r requirements.txt",
+        )
+
+    qr = qrcode.QRCode(version=None, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=10, border=2)
+    qr.add_data(upi_url)
+    qr.make(fit=True)
+
+    buffer = io.BytesIO()
+    qr.make_image(fill_color="#1a73e8", back_color="#FFFFFF").save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+    return {
+        "amount": round(amount, 2),
+        "store_upi_id": vendor.upi_id,
+        "store_name": vendor.store_name,
+        "upi_url": upi_url,
+        "qr_base64": f"data:image/png;base64,{encoded}",
+    }
