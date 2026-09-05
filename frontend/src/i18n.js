@@ -14,6 +14,7 @@ const resources = {
         ai_suggestions: "AI Suggestions",
         voice_log: "Voice Log",
         scan: "Scan",
+        deliveries: "Deliveries",
         forecast: "Forecast",
         heatmap: "Heatmap",
         khata: "Khata"
@@ -73,6 +74,7 @@ const resources = {
         ai_suggestions: "AI सुझाव",
         voice_log: "वॉयस लॉग",
         scan: "स्कैन",
+        deliveries: "डिलीवरी",
         forecast: "अनुमान",
         heatmap: "हीटमैप",
         khata: "खाता"
@@ -112,7 +114,6 @@ const resources = {
       nav: {
         home: "होम",
         billing: "बिलिंग",
-        billing: "बिलिंग",
         log: "लॉग",
         stock: "स्टॉक",
         khata: "खाता",
@@ -133,6 +134,7 @@ const resources = {
         ai_suggestions: "AI सूचना",
         voice_log: "व्हॉइस लॉग",
         scan: "स्कॅन",
+        deliveries: "डिलिव्हरी",
         forecast: "अंदाज",
         heatmap: "हीटमॅप",
         khata: "खाते"

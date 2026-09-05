@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 import models
 import schemas
 import security
+import stock
 from database import get_db
 
 router = APIRouter()
@@ -91,43 +92,52 @@ def expiring_soon(
     now = datetime.utcnow()
     threshold = now + timedelta(days=days)
 
-    items = (
-        db.query(models.InventoryItem)
-        .filter(
-            models.InventoryItem.vendor_id == vendor.id,
-            models.InventoryItem.is_archived.is_(False),
-            models.InventoryItem.expiry_date.isnot(None),
-            models.InventoryItem.expiry_date <= threshold,
-            models.InventoryItem.current_qty > 0,
-        )
-        .order_by(models.InventoryItem.expiry_date.asc())
-        .all()
-    )
-
+    # One row per lot, not per product: two batches of the same thing dated a
+    # month apart are two different problems, and the older one used to be
+    # invisible behind the newer one's date.
     results = []
-    for item in items:
-        days_left = max(0, (item.expiry_date - now).days)
+    for batch, item in stock.expiring_batches(db, vendor.id, threshold):
+        days_left = max(0, (batch.expiry_date - now).days)
         urgency = "critical" if days_left <= 2 else "warning"
 
         # Clear it at a discount rather than write it off: anything above cost
         # beats throwing it away. The steeper cut goes to the tighter deadline.
         discount_pct = 30 if days_left <= 1 else 20 if days_left <= 2 else 10
         suggested = round((item.selling_price or 0) * (1 - discount_pct / 100), 2)
-        # Never suggest selling below what it cost.
-        if item.cost_price and suggested < item.cost_price:
-            suggested = round(item.cost_price, 2)
+        # Never suggest selling below what this lot cost.
+        lot_cost = batch.unit_cost or item.cost_price or 0
+        if lot_cost and suggested < lot_cost:
+            suggested = round(lot_cost, 2)
 
         payload = schemas.InventoryItemResponse.model_validate(item).model_dump()
         payload.update(
+            # The lot's own date and quantity, so the row describes the stock
+            # actually at risk rather than everything with that name.
+            expiry_date=batch.expiry_date,
+            current_qty=batch.qty_remaining,
+            batch_id=batch.id,
+            batch_no=batch.batch_no,
+            qty_at_risk=batch.qty_remaining,
             days_left=days_left,
             urgency=urgency,
-            estimated_loss_risk=round((item.current_qty or 0) * (item.cost_price or 0), 2),
+            estimated_loss_risk=round((batch.qty_remaining or 0) * lot_cost, 2),
             suggested_discount_pct=discount_pct,
             suggested_price=suggested,
         )
         results.append(payload)
 
     return results
+
+
+@router.get("/{item_id}/batches", response_model=List[schemas.StockBatchResponse])
+def item_batches(
+    item_id: str,
+    vendor: models.Vendor = Depends(security.get_current_vendor),
+    db: Session = Depends(get_db),
+):
+    """The lots making up this product's stock, in the order they will sell."""
+    item = _owned_item(item_id, vendor, db)
+    return stock.open_batches(db, item)
 
 
 @router.get("/{item_id}", response_model=schemas.InventoryItemResponse)
@@ -162,8 +172,25 @@ def create_item(
         if clash:
             raise HTTPException(status_code=409, detail=f"That barcode is already on {clash.sku_name}")
 
-    item = models.InventoryItem(vendor_id=vendor.id, **req.model_dump())
+    fields = req.model_dump()
+    # Quantity lives in lots now, so the product starts empty and the opening
+    # balance is added as one -- otherwise current_qty would claim stock that no
+    # lot backs, and the next reconcile would wipe it.
+    opening_qty = fields.pop("current_qty", 0.0) or 0.0
+    item = models.InventoryItem(vendor_id=vendor.id, current_qty=0.0, **fields)
     db.add(item)
+    db.flush()
+
+    if opening_qty > 0:
+        stock.add_stock(
+            db,
+            item,
+            opening_qty,
+            unit_cost=item.cost_price,
+            mfg_date=item.mfg_date,
+            expiry_date=item.expiry_date,
+        )
+
     db.add(
         models.ActivityLog(
             vendor_id=vendor.id, action="Product added", details=f"Added {item.sku_name} to the catalogue."
@@ -182,9 +209,37 @@ def update_item(
     db: Session = Depends(get_db),
 ):
     item = _owned_item(item_id, vendor, db)
-    for field, value in req.model_dump().items():
+    fields = req.model_dump()
+    requested_qty = fields.pop("current_qty", None)
+    requested_expiry = fields.get("expiry_date")
+    had_expiry = item.expiry_date
+
+    for field, value in fields.items():
         setattr(item, field, value)
-    item.last_updated = datetime.utcnow()
+
+    # An edited expiry belongs to the stock on the shelf, not to the product
+    # alone -- written there, the next reconcile would overwrite it from the
+    # lots. This runs before any quantity change so that the common case, one
+    # lot, ends up with the whole shelf carrying the date that was typed.
+    if requested_expiry != had_expiry:
+        soonest = stock.open_batches(db, item)
+        if soonest:
+            soonest[0].expiry_date = requested_expiry
+
+    # Editing the quantity on the product is a correction to the shelf, so it
+    # moves lots rather than overwriting the total they add up to. Added units
+    # take the same date, which lets them merge into the lot above instead of
+    # leaving a second, near-identical row behind after every edit.
+    if requested_qty is not None:
+        delta = round(requested_qty - (item.current_qty or 0.0), 3)
+        if delta > 0:
+            stock.add_stock(
+                db, item, delta, unit_cost=item.cost_price, expiry_date=requested_expiry
+            )
+        elif delta < 0:
+            stock.consume_stock(db, item, -delta)
+
+    stock.reconcile(db, item)
     db.commit()
     db.refresh(item)
     return item
@@ -216,8 +271,10 @@ def adjust_stock(
     db: Session = Depends(get_db),
 ):
     item = _owned_item(item_id, vendor, db)
-    item.current_qty = max(0.0, (item.current_qty or 0.0) + req.qty_change)
-    item.last_updated = datetime.utcnow()
+    if req.qty_change > 0:
+        stock.add_stock(db, item, req.qty_change, unit_cost=item.cost_price)
+    else:
+        stock.consume_stock(db, item, -req.qty_change)
 
     db.add(
         models.Transaction(
@@ -364,8 +421,10 @@ def voice_entry(
         raise HTTPException(status_code=400, detail="Confirm the product and quantity before saving")
 
     item = _owned_item(req.item_id, vendor, db)
-    item.current_qty = max(0.0, (item.current_qty or 0.0) + req.qty)
-    item.last_updated = datetime.utcnow()
+    if req.qty > 0:
+        stock.add_stock(db, item, req.qty, unit_cost=item.cost_price)
+    else:
+        stock.consume_stock(db, item, -req.qty)
 
     db.add(
         models.Transaction(
@@ -394,7 +453,7 @@ class OCRItem(BaseModel):
 
 
 class OCREntryRequest(BaseModel):
-    items: List[OCRItem] = Field(min_length=1)
+    items: List[OCRItem] = Field(min_length=1, max_length=200)
 
 
 @router.post("/ocr-entry")
@@ -415,7 +474,6 @@ def ocr_entry(
             .first()
         )
         if item:
-            item.current_qty = (item.current_qty or 0.0) + entry.qty
             if entry.cost_price:
                 item.cost_price = entry.cost_price
             updated.append(item.sku_name)
@@ -424,13 +482,15 @@ def ocr_entry(
                 vendor_id=vendor.id,
                 sku_name=entry.sku_name,
                 category="Uncategorised",
-                current_qty=entry.qty,
+                current_qty=0.0,
                 cost_price=entry.cost_price or 0.0,
                 selling_price=0.0,
             )
             db.add(item)
             db.flush()
             created.append(item.sku_name)
+
+        stock.add_stock(db, item, entry.qty, unit_cost=entry.cost_price or item.cost_price)
 
         db.add(
             models.Transaction(

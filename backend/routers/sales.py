@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, joinedload
 import models
 import schemas
 import security
+import stock
 from database import get_db
 
 router = APIRouter()
@@ -72,34 +73,41 @@ def create_sale(
         # A price on the request wins (counter-level discounts and haggling are
         # normal), otherwise fall back to the catalogue price.
         unit_price = line.unit_price if line.unit_price is not None else (item.selling_price if item else 0.0)
-        unit_cost = item.cost_price if item else 0.0
         sku_name = (item.sku_name if item else line.sku_name) or "Unlisted item"
 
-        db.add(
-            models.SaleItem(
-                sale_id=sale.id,
-                item_id=item.id if item else None,
-                sku_name=sku_name,
-                qty=line.qty,
-                unit_price=unit_price,
-                unit_cost=unit_cost,
-            )
+        # Take the stock first: which lots it comes out of is what the units
+        # actually cost, and that is more honest than the product's average.
+        consumed = stock.consume_stock(db, item, line.qty) if item else None
+        unit_cost = consumed.unit_cost if consumed else 0.0
+
+        sale_item = models.SaleItem(
+            sale_id=sale.id,
+            item_id=item.id if item else None,
+            sku_name=sku_name,
+            qty=line.qty,
+            unit_price=unit_price,
+            unit_cost=unit_cost,
         )
+        db.add(sale_item)
 
         total_amount += line.qty * unit_price
-        total_cost += line.qty * unit_cost
+        total_cost += consumed.cost if consumed else 0.0
 
         if item:
             # Never block a sale because the counted stock disagrees with
-            # reality -- there is a customer standing there. Sell it, clamp the
-            # count at zero, and tell the shopkeeper the count needs fixing.
-            if item.current_qty < line.qty:
+            # reality -- there is a customer standing there. Sell it, and tell
+            # the shopkeeper the count needs fixing.
+            if consumed.shortfall > 0:
+                counted = line.qty - consumed.shortfall
                 stock_warnings.append(
-                    f"{item.sku_name}: sold {line.qty:g} but only {item.current_qty:g} were counted"
+                    f"{item.sku_name}: sold {line.qty:g} but only {counted:g} were counted"
                 )
-            item.current_qty = max(0.0, (item.current_qty or 0.0) - line.qty)
+
+            # Needs the SaleItem's id before the lots can be linked to it.
+            db.flush()
+            stock.record_allocations(db, sale_item, consumed)
+
             item.sale_count = (item.sale_count or 0) + 1
-            item.last_updated = datetime.utcnow()
 
             db.add(
                 models.Transaction(
@@ -247,8 +255,10 @@ def void_sale(
     for line in sale.line_items:
         if line.item_id:
             item = db.query(models.InventoryItem).filter(models.InventoryItem.id == line.item_id).first()
+            # Back into the lots it actually came out of, so voiding a sale of
+            # old stock does not quietly turn it into new stock.
+            stock.restore_sale_item(db, line, item)
             if item:
-                item.current_qty = (item.current_qty or 0.0) + (line.qty or 0.0)
                 item.sale_count = max(0, (item.sale_count or 0) - 1)
 
     if sale.customer_id:

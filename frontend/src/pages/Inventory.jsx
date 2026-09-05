@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
-  Barcode, Calendar, Download, FileText, Loader2, Package, Pencil, Plus, Search, Trash2, X,
+  Barcode, Calendar, Download, FileText, Layers, Loader2, Package, Pencil, Plus, Search, Trash2,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 // jspdf 4.x exports the constructor as a NAMED export; the default export is
@@ -16,10 +16,12 @@ import { money, qty as fmtQty, shortDate } from '../lib/format';
 import { useToast } from '../components/Toast';
 import { CardSkeleton, EmptyState, ErrorState } from '../components/States';
 import ExpiryAlert from '../components/ExpiryAlert';
+import ModalShell, { Field, inputClass } from '../components/ModalShell';
 
 const BLANK_ITEM = {
   sku_name: '', category: 'General', unit: 'unit', current_qty: 0,
-  reorder_point: 10, cost_price: 0, selling_price: 0, expiry_date: '', barcode: '',
+  reorder_point: 10, cost_price: 0, selling_price: 0, expiry_date: '', mfg_date: '',
+  barcode: '', pack_type: 'loose', units_per_pack: 1, hsn_code: '', gst_rate: 0,
 };
 
 export default function Inventory() {
@@ -30,6 +32,10 @@ export default function Inventory() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
+
+  // The clock is read in an effect, not while rendering: a render that reads
+  // Date.now() can classify the same list differently on each pass.
+  const [expirySoonCutoff, setExpirySoonCutoff] = useState(() => Date.now() + 7 * 86400000);
 
   const [editing, setEditing] = useState(null); // item object, or BLANK_ITEM for new
   const [adjusting, setAdjusting] = useState(null);
@@ -49,6 +55,7 @@ export default function Inventory() {
 
   useEffect(() => {
     load();
+    setExpirySoonCutoff(Date.now() + 7 * 86400000);
   }, []);
 
   const remove = async (item) => {
@@ -117,6 +124,7 @@ export default function Inventory() {
     toast.success('CSV downloaded');
   };
 
+
   const term = search.trim().toLowerCase();
   const filtered = term
     ? items.filter(
@@ -180,9 +188,10 @@ export default function Inventory() {
           {filtered.map((item) => {
             const lowStock = item.current_qty <= item.reorder_point;
             const nearExpiry =
-              item.expiry_date && new Date(item.expiry_date) <= new Date(Date.now() + 7 * 86400000);
+              item.expiry_date && new Date(item.expiry_date).getTime() <= expirySoonCutoff;
             return (
-              <li key={item.id} className="bg-brand-surface rounded-2xl p-4 border border-brand-border shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:shadow-md transition-all">
+              <li key={item.id} className="bg-brand-surface rounded-2xl p-4 border border-brand-border shadow-sm hover:shadow-md transition-all">
+               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="font-bold text-brand-ink text-sm md:text-base">{item.sku_name}</p>
@@ -236,6 +245,8 @@ export default function Inventory() {
                     </IconButton>
                   </div>
                 </div>
+               </div>
+               <BatchList item={item} />
               </li>
             );
           })}
@@ -267,6 +278,80 @@ export default function Inventory() {
   );
 }
 
+/**
+ * The dated lots making up one product's stock, in the order they will sell.
+ *
+ * Collapsed by default and only fetched when opened -- most of the time the
+ * total is all a shopkeeper needs, and it matters on the handful of products
+ * holding two batches at different dates or different costs.
+ */
+function BatchList({ item }) {
+  const [open, setOpen] = useState(false);
+  const [lots, setLots] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const toggle = async () => {
+    const next = !open;
+    setOpen(next);
+    if (!next || lots) return;
+    setLoading(true);
+    try {
+      const res = await api.get(`/inventory/${item.id}/batches`);
+      setLots(res.data);
+    } catch {
+      setLots([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!item.current_qty) return null;
+
+  return (
+    <div className="mt-3 pt-2.5 border-t border-brand-border/60">
+      <button
+        onClick={toggle}
+        aria-expanded={open}
+        className="text-[11px] font-bold text-brand-muted hover:text-brand-primary flex items-center gap-1 focus-visible:ring-2 focus-visible:ring-brand-primary outline-none rounded"
+      >
+        <Layers size={12} /> {open ? 'Hide' : 'Show'} batches
+      </button>
+
+      {open && (
+        <div className="mt-2 space-y-1">
+          {loading && <p className="text-[11px] text-brand-muted">Loading…</p>}
+          {!loading && lots?.length === 0 && (
+            <p className="text-[11px] text-brand-muted">No batch detail recorded.</p>
+          )}
+          {lots?.map((lot, index) => (
+            <div
+              key={lot.id}
+              className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] bg-brand-bg border border-brand-border/60 rounded-lg px-2.5 py-1.5"
+            >
+              {/* The first lot in this order is the one the next sale comes out of. */}
+              {index === 0 && (
+                <span className="text-[9px] font-extrabold uppercase tracking-wider text-brand-primary">
+                  Sells next
+                </span>
+              )}
+              <span className="font-bold text-brand-ink">
+                {fmtQty(lot.qty_remaining)} {item.unit}
+              </span>
+              {lot.batch_no && <span className="text-brand-muted">batch {lot.batch_no}</span>}
+              <span className="text-brand-muted flex items-center gap-1">
+                <Calendar size={11} />
+                {lot.expiry_date ? shortDate(lot.expiry_date) : 'no expiry'}
+              </span>
+              <span className="text-brand-muted">at {money(lot.unit_cost)}</span>
+              <span className="ml-auto font-semibold text-brand-ink">{money(lot.value_at_cost)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function IconButton({ onClick, children, label, danger }) {
   return (
     <button
@@ -290,7 +375,12 @@ function ItemFormModal({ item, onClose, onSaved }) {
   const [form, setForm] = useState({
     ...item,
     expiry_date: item.expiry_date ? item.expiry_date.slice(0, 10) : '',
+    mfg_date: item.mfg_date ? item.mfg_date.slice(0, 10) : '',
     barcode: item.barcode || '',
+    pack_type: item.pack_type || 'loose',
+    units_per_pack: item.units_per_pack ?? 1,
+    hsn_code: item.hsn_code || '',
+    gst_rate: item.gst_rate ?? 0,
   });
   const [saving, setSaving] = useState(false);
 
@@ -309,7 +399,12 @@ function ItemFormModal({ item, onClose, onSaved }) {
         cost_price: parseFloat(form.cost_price) || 0,
         selling_price: parseFloat(form.selling_price) || 0,
         expiry_date: form.expiry_date ? new Date(form.expiry_date).toISOString() : null,
+        mfg_date: form.mfg_date ? new Date(form.mfg_date).toISOString() : null,
         barcode: form.barcode?.trim() || null,
+        pack_type: form.pack_type === 'carton' ? 'carton' : 'loose',
+        units_per_pack: form.pack_type === 'carton' ? parseFloat(form.units_per_pack) || 1 : 1,
+        hsn_code: form.hsn_code?.trim() || null,
+        gst_rate: parseFloat(form.gst_rate) || 0,
       };
       if (isNew) await api.post('/inventory', payload);
       else await api.put(`/inventory/${item.id}`, payload);
@@ -369,11 +464,50 @@ function ItemFormModal({ item, onClose, onSaved }) {
         </div>
 
         <div className="grid grid-cols-2 gap-3">
+          <Field label="Manufactured">
+            <input type="date" value={form.mfg_date} onChange={set('mfg_date')} className={inputClass} />
+          </Field>
           <Field label="Expiry date">
             <input type="date" value={form.expiry_date} onChange={set('expiry_date')} className={inputClass} />
           </Field>
-          <Field label="Barcode">
-            <input value={form.barcode} onChange={set('barcode')} className={inputClass} placeholder="8901262010053" />
+        </div>
+
+        <Field label="Barcode" hint="Scanning this at Stock intake finds the product.">
+          <input value={form.barcode} onChange={set('barcode')} className={inputClass} placeholder="8901262010053" />
+        </Field>
+
+        {/* How the item arrives from the wholesaler decides what one scan means
+            at the intake screen: a single unit, or a whole case. */}
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Comes as">
+            <select value={form.pack_type} onChange={set('pack_type')} className={inputClass}>
+              <option value="loose">Loose / single</option>
+              <option value="carton">Carton / box</option>
+            </select>
+          </Field>
+          <Field label="Units per box" hint={form.pack_type === 'carton' ? 'One scan adds this many.' : 'Loose items add one per scan.'}>
+            <input
+              type="number"
+              step="any"
+              min="1"
+              disabled={form.pack_type !== 'carton'}
+              value={form.pack_type === 'carton' ? form.units_per_pack : 1}
+              onChange={set('units_per_pack')}
+              className={`${inputClass} disabled:opacity-50`}
+            />
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="HSN code" hint="For GST paperwork.">
+            <input value={form.hsn_code} onChange={set('hsn_code')} className={inputClass} placeholder="1905" />
+          </Field>
+          <Field label="GST rate (%)">
+            <select value={form.gst_rate} onChange={set('gst_rate')} className={inputClass}>
+              {[0, 5, 12, 18, 28].map((rate) => (
+                <option key={rate} value={rate}>{rate}%</option>
+              ))}
+            </select>
           </Field>
         </div>
 
@@ -458,41 +592,5 @@ function AdjustModal({ item, onClose, onSaved }) {
         </button>
       </div>
     </ModalShell>
-  );
-}
-
-const inputClass =
-  'w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-primary';
-
-function Field({ label, children, required }) {
-  return (
-    <label className="block">
-      <span className="text-[11px] font-bold text-brand-muted uppercase tracking-wider">
-        {label}{required && <span className="text-brand-danger"> *</span>}
-      </span>
-      <div className="mt-1">{children}</div>
-    </label>
-  );
-}
-
-function ModalShell({ title, children, onClose }) {
-  useEffect(() => {
-    const onKey = (e) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
-  return (
-    <div className="fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" role="dialog" aria-modal="true" aria-label={title} onClick={onClose}>
-      <div className="bg-brand-surface rounded-t-3xl sm:rounded-3xl w-full sm:max-w-md p-5 shadow-2xl border border-brand-border max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="font-bold text-brand-ink">{title}</h3>
-          <button onClick={onClose} aria-label="Close" className="text-brand-muted hover:text-brand-ink p-1 rounded-full hover:bg-brand-bg focus-visible:ring-2 focus-visible:ring-brand-primary outline-none">
-            <X size={18} />
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>
   );
 }

@@ -1,12 +1,14 @@
 import logging
+import uuid
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 import models
-from config import settings
+from config import settings, validate_for_production
 from database import engine
-from routers import analytics, auth, checkout, demo, inventory, khata, sales, vendor
+from routers import analytics, auth, checkout, demo, intake, inventory, khata, sales, vendor
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
 log = logging.getLogger("vendor360")
@@ -17,6 +19,11 @@ app = FastAPI(
     title="Vendor360 API",
     version="2.0.0",
     description="Inventory, billing and digital khata for neighbourhood retail.",
+    # The interactive docs enumerate every endpoint and schema. Useful locally,
+    # free reconnaissance in production.
+    docs_url="/docs" if settings.ENABLE_DOCS else None,
+    redoc_url="/redoc" if settings.ENABLE_DOCS else None,
+    openapi_url="/openapi.json" if settings.ENABLE_DOCS else None,
 )
 
 # Explicit origins only. "*" with allow_credentials=True is rejected by browsers,
@@ -27,7 +34,61 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
+    max_age=600,
 )
+
+
+@app.middleware("http")
+async def security_middleware(request: Request, call_next):
+    """Body ceiling, then headers that hold whether this is served as a website
+    or wrapped in an app shell."""
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > settings.MAX_REQUEST_BYTES:
+        return JSONResponse(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            content={"detail": "That request is too large."},
+        )
+
+    response = await call_next(request)
+
+    # This API serves JSON to a separate frontend; it never renders HTML and is
+    # never framed, so the policy can be as tight as it gets.
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    response.headers["Cross-Origin-Resource-Policy"] = "same-site"
+    # Tokens and shop data must never sit in a shared cache.
+    response.headers["Cache-Control"] = "no-store"
+
+    if settings.IS_PRODUCTION:
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains; preload"
+        )
+
+    return response
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Never let an internal error reach the client.
+
+    A raw traceback names file paths, library versions and sometimes data. The
+    reference is logged with the stack so it can be found; the caller gets the
+    reference and nothing else.
+    """
+    reference = uuid.uuid4().hex[:12]
+    log.exception("Unhandled error [%s] on %s %s", reference, request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Something went wrong on our side. Quote this reference if you report it.",
+            "reference": reference,
+        },
+    )
 
 # One registration per router, one decorator per route. The previous build
 # mounted khata and checkout twice while their routes also hardcoded "/api/...",
@@ -36,6 +97,7 @@ app.include_router(auth.router, prefix="/api/auth", tags=["Auth"])
 app.include_router(vendor.router, prefix="/api/vendor", tags=["Vendor Profile"])
 app.include_router(inventory.router, prefix="/api/inventory", tags=["Inventory"])
 app.include_router(sales.router, prefix="/api/sales", tags=["Billing"])
+app.include_router(intake.router, prefix="/api/intake", tags=["Stock Intake"])
 app.include_router(khata.router, prefix="/api", tags=["Digital Khata"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
 app.include_router(checkout.router, prefix="/api/checkout", tags=["UPI Checkout"])
@@ -44,17 +106,27 @@ app.include_router(demo.router, prefix="/api/demo", tags=["Demo Data"])
 
 @app.on_event("startup")
 def startup_checks():
-    if settings.SECRET_KEY_IS_EPHEMERAL:
-        log.warning(
-            "SECRET_KEY is not set, so a random one was generated. It rotates on every "
-            "restart, which signs everyone out. Set SECRET_KEY in backend/.env."
+    problems = validate_for_production()
+
+    if settings.IS_PRODUCTION and problems:
+        # Refuse to serve rather than run a shop's takings on a configuration
+        # that accepts a fixed code as anyone's second factor.
+        for problem in problems:
+            log.critical("REFUSING TO START: %s", problem)
+        raise RuntimeError(
+            "Unsafe configuration for APP_ENV=production: " + " | ".join(problems)
         )
-    if settings.DEBUG_OTP:
+
+    for problem in problems:
+        log.warning("Development-only setting: %s", problem)
+
+    if not settings.IS_PRODUCTION:
         log.warning(
-            "DEBUG_OTP is on: the code '%s' is accepted for any account and login "
-            "responses include the generated OTP. Set DEBUG_OTP=false before deploying.",
-            settings.DEBUG_OTP_CODE,
+            "APP_ENV=%s. Set APP_ENV=production before deploying; startup then refuses "
+            "any of the above.",
+            settings.APP_ENV,
         )
+
     if not checkout.QR_AVAILABLE:
         log.warning(
             "The 'qrcode' package is missing, so UPI QR generation will return 503. "
@@ -74,4 +146,9 @@ def read_root():
 
 @app.get("/api/health", tags=["Health"])
 def health():
-    return {"status": "ok", "demo_mode": settings.DEMO_MODE, "debug_otp": settings.DEBUG_OTP}
+    """Deliberately says nothing but "up".
+
+    It used to report demo_mode and debug_otp, which told an unauthenticated
+    caller whether the fixed OTP would work before they tried it.
+    """
+    return {"status": "ok"}

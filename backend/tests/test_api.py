@@ -1,6 +1,21 @@
 """The paths where being wrong costs money: stock movement, margin, khata
 balance -- plus the tenant isolation that used to be missing entirely.
 """
+from datetime import datetime, timedelta
+
+from conftest import sign_in
+
+
+def _other_vendor(client, name):
+    """A second shop, for the tenant-isolation cases."""
+    return sign_in(
+        client,
+        name=name.title(),
+        username=name,
+        email=f"{name}@example.com",
+        phone=f"+91 9{abs(hash(name)) % 1000000000:09d}",
+        password="another-good-password",
+    )
 
 
 # --------------------------------------------------------------------------
@@ -21,20 +36,7 @@ def test_endpoints_require_a_token(client):
 def test_a_vendor_cannot_touch_another_vendors_stock(client, vendor, item):
     """The original build took vendor_id from the URL, so changing it exposed
     someone else's shop. Identity now comes from the token only."""
-    other = client.post(
-        "/api/auth/signup",
-        json={
-            "name": "Other Owner",
-            "username": "otherowner",
-            "email": "other@example.com",
-            "phone": "+91 9111111111",
-            "password": "another-password",
-        },
-    ).json()
-    token = client.post(
-        "/api/auth/verify-otp", json={"vendor_id": other["vendor_id"], "otp": "123456"}
-    ).json()["token"]
-    other_headers = {"Authorization": f"Bearer {token}"}
+    other_headers, _ = _other_vendor(client, "otherowner")
 
     assert client.get(f"/api/inventory/{item['id']}", headers=other_headers).status_code == 404
     assert client.get("/api/inventory", headers=other_headers).json() == []
@@ -114,20 +116,11 @@ def test_voiding_a_sale_restores_stock(client, vendor, item):
 
 
 def test_selling_another_vendors_item_fails(client, vendor, item):
-    other = client.post(
-        "/api/auth/signup",
-        json={
-            "name": "Other", "username": "other2", "email": "other2@example.com",
-            "phone": "+91 9222222222", "password": "another-password",
-        },
-    ).json()
-    token = client.post(
-        "/api/auth/verify-otp", json={"vendor_id": other["vendor_id"], "otp": "123456"}
-    ).json()["token"]
+    other_headers, _ = _other_vendor(client, "othertwo")
 
     response = client.post(
         "/api/sales",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=other_headers,
         json={"payment_mode": "cash", "items": [{"item_id": item["id"], "qty": 1}]},
     )
     assert response.status_code == 404
@@ -297,7 +290,6 @@ def test_login_does_not_return_a_token_before_otp(client, vendor):
 # Inventory
 # --------------------------------------------------------------------------
 def test_expiring_soon_suggests_a_price_above_cost(client, vendor):
-    from datetime import datetime, timedelta
 
     headers, _ = vendor
     client.post(
@@ -336,3 +328,969 @@ def test_duplicate_barcode_is_rejected(client, vendor):
     assert client.post("/api/inventory", headers=headers, json=payload).status_code == 201
     payload["sku_name"] = "B"
     assert client.post("/api/inventory", headers=headers, json=payload).status_code == 409
+
+
+# --------------------------------------------------------------------------
+# Stock intake -- scanning a delivery in
+# --------------------------------------------------------------------------
+def _loose(client, headers, **overrides):
+    payload = {
+        "sku_name": "Parle-G 100g", "barcode": "8901719101090", "current_qty": 4,
+        "cost_price": 8.0, "selling_price": 10.0, "pack_type": "loose", "gst_rate": 5.0,
+    }
+    payload.update(overrides)
+    res = client.post("/api/inventory", headers=headers, json=payload)
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def _carton(client, headers, **overrides):
+    payload = {
+        "sku_name": "Maggi 70g", "barcode": "8901058000108", "current_qty": 0,
+        "cost_price": 11.0, "selling_price": 14.0, "pack_type": "carton",
+        "units_per_pack": 24, "gst_rate": 12.0, "hsn_code": "1902",
+    }
+    payload.update(overrides)
+    res = client.post("/api/inventory", headers=headers, json=payload)
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def test_scanning_a_loose_item_restocks_it_immediately(client, vendor):
+    headers, _ = vendor
+    product = _loose(client, headers)
+
+    res = client.post("/api/intake/scan", headers=headers, json={"barcode": product["barcode"]})
+    assert res.status_code == 200, res.text
+    body = res.json()
+
+    assert body["status"] == "applied"
+    assert body["line"]["qty_units"] == 1
+    assert body["item"]["current_qty"] == 5
+
+
+def test_scanning_a_carton_asks_before_writing_stock(client, vendor):
+    headers, _ = vendor
+    product = _carton(client, headers)
+
+    body = client.post("/api/intake/scan", headers=headers,
+                       json={"barcode": product["barcode"]}).json()
+
+    assert body["status"] == "confirm"
+    assert body["suggestion"]["units_per_pack"] == 24
+    assert body["suggestion"]["qty_units"] == 24
+    # Nothing moved yet -- that is the whole point of the confirm step.
+    assert client.get(f"/api/inventory/{product['id']}", headers=headers).json()["current_qty"] == 0
+
+
+def test_confirming_a_carton_adds_the_whole_pack(client, vendor):
+    headers, _ = vendor
+    product = _carton(client, headers)
+
+    body = client.post("/api/intake/confirm", headers=headers, json={
+        "item_id": product["id"], "packs": 2, "batch_no": "B12",
+        "expiry_date": "2027-01-31T00:00:00",
+    }).json()
+
+    assert body["line"]["qty_units"] == 48
+    assert body["item"]["current_qty"] == 48
+    assert body["line"]["batch_no"] == "B12"
+
+
+def test_confirm_remembers_the_pack_size_for_next_time(client, vendor):
+    headers, _ = vendor
+    product = _carton(client, headers, units_per_pack=1, pack_type="carton")
+
+    client.post("/api/intake/confirm", headers=headers,
+                json={"item_id": product["id"], "packs": 1, "units_per_pack": 30,
+                      "unit_cost": 9.5, "remember": True})
+
+    updated = client.get(f"/api/inventory/{product['id']}", headers=headers).json()
+    assert updated["units_per_pack"] == 30
+    assert updated["cost_price"] == 9.5
+
+
+def test_repeat_scans_of_one_item_become_a_single_counted_line(client, vendor):
+    headers, _ = vendor
+    product = _loose(client, headers)
+
+    for _ in range(3):
+        client.post("/api/intake/scan", headers=headers, json={"barcode": product["barcode"]})
+
+    session = client.get("/api/intake/session/current", headers=headers).json()
+    assert len(session["lines"]) == 1
+    assert session["lines"][0]["qty_units"] == 3
+
+
+def test_an_unknown_barcode_is_reported_not_invented(client, vendor):
+    headers, _ = vendor
+    body = client.post("/api/intake/scan", headers=headers, json={"barcode": "0000000000000"}).json()
+    assert body["status"] == "unknown"
+    assert body["barcode"] == "0000000000000"
+
+
+def test_undoing_a_scan_takes_the_stock_back_off(client, vendor):
+    headers, _ = vendor
+    product = _loose(client, headers)
+
+    line = client.post("/api/intake/scan", headers=headers,
+                       json={"barcode": product["barcode"], "packs": 6}).json()["line"]
+    assert client.get(f"/api/inventory/{product['id']}", headers=headers).json()["current_qty"] == 10
+
+    assert client.delete(f"/api/intake/lines/{line['id']}", headers=headers).status_code == 204
+    assert client.get(f"/api/inventory/{product['id']}", headers=headers).json()["current_qty"] == 4
+
+
+def test_summary_totals_gst_and_splits_it_evenly(client, vendor):
+    headers, _ = vendor
+    loose = _loose(client, headers)                       # 5% GST, cost 8.00
+    carton = _carton(client, headers)                     # 12% GST, cost 11.00
+
+    client.post("/api/intake/scan", headers=headers, json={"barcode": loose["barcode"], "packs": 10})
+    client.post("/api/intake/confirm", headers=headers, json={"item_id": carton["id"], "packs": 1})
+
+    intake_id = client.get("/api/intake/session/current", headers=headers).json()["id"]
+    summary = client.post(f"/api/intake/session/{intake_id}/close", headers=headers).json()
+
+    # 10 x 8.00 = 80.00 taxable at 5%; 24 x 11.00 = 264.00 taxable at 12%.
+    assert summary["totals"]["taxable_value"] == 344.0
+    assert summary["totals"]["gst_amount"] == 35.68   # 4.00 + 31.68
+    assert summary["totals"]["grand_total"] == 379.68
+
+    by_rate = {row["rate"]: row for row in summary["gst_breakup"]}
+    assert by_rate[5.0]["cgst"] == 2.0 and by_rate[5.0]["sgst"] == 2.0
+    assert by_rate[12.0]["cgst"] == 15.84 and by_rate[12.0]["sgst"] == 15.84
+
+
+def test_summary_says_when_it_is_not_a_valid_gst_claim(client, vendor):
+    headers, _ = vendor
+    product = _loose(client, headers)
+    client.post("/api/intake/scan", headers=headers, json={"barcode": product["barcode"]})
+
+    intake_id = client.get("/api/intake/session/current", headers=headers).json()["id"]
+    summary = client.get(f"/api/intake/session/{intake_id}/summary", headers=headers).json()
+
+    # No GSTIN on the store yet, so the document must not claim to be one.
+    assert summary["gst_ready"] is False
+
+    client.put("/api/vendor/me", headers=headers, json={
+        "name": "Test Owner", "store_name": "Test Store", "gstin": "27AAPFU0939F1ZV",
+    })
+    summary = client.get(f"/api/intake/session/{intake_id}/summary", headers=headers).json()
+    assert summary["gst_ready"] is True
+    assert summary["store"]["gstin"] == "27AAPFU0939F1ZV"
+
+
+def test_closing_an_empty_delivery_is_rejected(client, vendor):
+    headers, _ = vendor
+    intake_id = client.post("/api/intake/session", headers=headers).json()["id"]
+    assert client.post(f"/api/intake/session/{intake_id}/close", headers=headers).status_code == 400
+
+
+def test_a_vendor_cannot_scan_into_another_vendors_intake(client, vendor):
+    headers, _ = vendor
+    intake_id = client.post("/api/intake/session", headers=headers).json()["id"]
+
+    other_headers, _ = _other_vendor(client, "otherintake")
+
+    assert client.get(f"/api/intake/session/{intake_id}/summary",
+                      headers=other_headers).status_code == 404
+    assert client.put(f"/api/intake/session/{intake_id}", headers=other_headers,
+                      json={"supplier_name": "Hijack"}).status_code == 404
+
+
+# --------------------------------------------------------------------------
+# Stock intake -- cost, expiry and tax basis
+# --------------------------------------------------------------------------
+def test_new_batch_does_not_hide_older_expiry(client, vendor):
+    headers, _ = vendor
+    soon = (datetime.utcnow() + timedelta(days=3)).isoformat()
+    product = _carton(client, headers, current_qty=6, expiry_date=soon)
+
+    # A fresh carton dated well into next year arrives behind stock that is
+    # about to go off. The alert has to stay on the older date.
+    client.post("/api/intake/confirm", headers=headers, json={
+        "item_id": product["id"], "packs": 1,
+        "expiry_date": (datetime.utcnow() + timedelta(days=400)).isoformat(),
+    })
+
+    updated = client.get(f"/api/inventory/{product['id']}", headers=headers).json()
+    assert updated["expiry_date"][:10] == soon[:10]
+    assert len(client.get("/api/inventory/expiring-soon", headers=headers).json()) == 1
+
+
+def test_expiry_moves_forward_when_no_old_stock_remains(client, vendor):
+    headers, _ = vendor
+    stale = (datetime.utcnow() - timedelta(days=5)).isoformat()
+    product = _carton(client, headers, current_qty=0, expiry_date=stale)
+
+    fresh = (datetime.utcnow() + timedelta(days=200)).isoformat()
+    client.post("/api/intake/confirm", headers=headers,
+                json={"item_id": product["id"], "packs": 1, "expiry_date": fresh})
+
+    # Nothing was left to protect, so the shelf now genuinely holds the new lot.
+    updated = client.get(f"/api/inventory/{product['id']}", headers=headers).json()
+    assert updated["expiry_date"][:10] == fresh[:10]
+
+
+def test_cost_price_is_weighted_not_overwritten(client, vendor):
+    headers, _ = vendor
+    product = _carton(client, headers, current_qty=10, cost_price=10.0, units_per_pack=10)
+
+    # 10 units held at Rs 10 + 10 units arriving at Rs 20 = Rs 15 average.
+    client.post("/api/intake/confirm", headers=headers,
+                json={"item_id": product["id"], "packs": 1, "unit_cost": 20.0})
+
+    assert client.get(f"/api/inventory/{product['id']}", headers=headers).json()["cost_price"] == 15.0
+
+
+def test_first_delivery_takes_the_cost_it_arrived_at(client, vendor):
+    headers, _ = vendor
+    product = _carton(client, headers, current_qty=0, cost_price=0.0)
+
+    client.post("/api/intake/confirm", headers=headers,
+                json={"item_id": product["id"], "packs": 1, "unit_cost": 9.5})
+
+    # Nothing to blend with, so no averaging against a zero cost.
+    assert client.get(f"/api/inventory/{product['id']}", headers=headers).json()["cost_price"] == 9.5
+
+
+def test_undo_restores_cost_and_expiry(client, vendor):
+    headers, _ = vendor
+    original_expiry = (datetime.utcnow() + timedelta(days=300)).isoformat()
+    product = _carton(client, headers, current_qty=10, cost_price=10.0,
+                      units_per_pack=10, expiry_date=original_expiry)
+
+    line = client.post("/api/intake/confirm", headers=headers, json={
+        "item_id": product["id"], "packs": 1, "unit_cost": 20.0,
+        "expiry_date": (datetime.utcnow() + timedelta(days=9)).isoformat(),
+    }).json()["line"]
+
+    assert client.delete(f"/api/intake/lines/{line['id']}", headers=headers).status_code == 204
+
+    # An average cannot be un-blended, and an expiry left behind by departed
+    # stock would warn about goods that are gone -- so both are recorded.
+    restored = client.get(f"/api/inventory/{product['id']}", headers=headers).json()
+    assert restored["cost_price"] == 10.0
+    assert restored["expiry_date"][:10] == original_expiry[:10]
+    assert restored["current_qty"] == 10
+
+
+def test_repeat_scans_undo_back_to_before_the_first(client, vendor):
+    headers, _ = vendor
+    product = _loose(client, headers, current_qty=10, cost_price=10.0)
+
+    line = None
+    for _ in range(3):
+        line = client.post("/api/intake/scan", headers=headers,
+                           json={"barcode": product["barcode"]}).json()["line"]
+
+    client.delete(f"/api/intake/lines/{line['id']}", headers=headers)
+    assert client.get(f"/api/inventory/{product['id']}", headers=headers).json()["current_qty"] == 10
+
+
+def test_interstate_supplier_is_igst(client, vendor):
+    headers, _ = vendor
+    product = _carton(client, headers)
+    client.put("/api/vendor/me", headers=headers, json={
+        "name": "Test Owner", "store_name": "Test Store", "gstin": "27AAPFU0939F1ZV",
+    })
+    client.post("/api/intake/confirm", headers=headers, json={"item_id": product["id"], "packs": 1})
+
+    intake_id = client.get("/api/intake/session/current", headers=headers).json()["id"]
+    # State code 29 against the store's 27, so this is an inter-state purchase.
+    client.put(f"/api/intake/session/{intake_id}", headers=headers,
+               json={"supplier_gstin": "29AAPFU0939F1ZV"})
+
+    summary = client.get(f"/api/intake/session/{intake_id}/summary", headers=headers).json()
+    assert summary["interstate"] is True
+    assert summary["tax_basis_assumed"] is False
+    row = summary["gst_breakup"][0]
+    assert row["igst"] == 31.68 and row["cgst"] == 0.0 and row["sgst"] == 0.0
+
+
+def test_same_state_supplier_splits_into_cgst_and_sgst(client, vendor):
+    headers, _ = vendor
+    product = _carton(client, headers)
+    client.put("/api/vendor/me", headers=headers, json={
+        "name": "Test Owner", "store_name": "Test Store", "gstin": "27AAPFU0939F1ZV",
+    })
+    client.post("/api/intake/confirm", headers=headers, json={"item_id": product["id"], "packs": 1})
+
+    intake_id = client.get("/api/intake/session/current", headers=headers).json()["id"]
+    client.put(f"/api/intake/session/{intake_id}", headers=headers,
+               json={"supplier_gstin": "27ZZPFU0939F1ZV"})
+
+    summary = client.get(f"/api/intake/session/{intake_id}/summary", headers=headers).json()
+    assert summary["interstate"] is False
+    row = summary["gst_breakup"][0]
+    assert row["cgst"] == 15.84 and row["sgst"] == 15.84 and row["igst"] == 0.0
+
+
+def test_unknown_gstins_admit_the_split_was_assumed(client, vendor):
+    headers, _ = vendor
+    product = _carton(client, headers)
+    client.post("/api/intake/confirm", headers=headers, json={"item_id": product["id"], "packs": 1})
+
+    intake_id = client.get("/api/intake/session/current", headers=headers).json()["id"]
+    summary = client.get(f"/api/intake/session/{intake_id}/summary", headers=headers).json()
+
+    # No GSTIN either side: fall back to a local split, but say so.
+    assert summary["interstate"] is False
+    assert summary["tax_basis_assumed"] is True
+
+
+def test_seeding_clears_old_intakes(client, vendor):
+    headers, _ = vendor
+    product = _loose(client, headers)
+    client.post("/api/intake/scan", headers=headers, json={"barcode": product["barcode"]})
+    assert client.get("/api/intake/session/current", headers=headers).json() is not None
+
+    assert client.post("/api/demo/seed", headers=headers).status_code == 200
+
+    # "Load sample data" says it replaces everything, so a delivery pointing at
+    # now-deleted products must not survive it.
+    assert client.get("/api/intake/session/current", headers=headers).json() is None
+    assert client.get("/api/intake/sessions", headers=headers).json() == []
+
+
+def test_browser_style_utc_dates_do_not_break_the_expiry_comparison(client, vendor):
+    headers, _ = vendor
+    soon = datetime.utcnow() + timedelta(days=3)
+    # Exactly what Date.toISOString() sends from the browser, Z and all. Parsed
+    # naively this is timezone-aware and cannot be compared with what the
+    # database returns, which used to take the confirm endpoint down with a 500.
+    product = _carton(client, headers, current_qty=6,
+                      expiry_date=soon.isoformat(timespec="milliseconds") + "Z")
+
+    later = (datetime.utcnow() + timedelta(days=400)).isoformat(timespec="milliseconds") + "Z"
+    res = client.post("/api/intake/confirm", headers=headers,
+                      json={"item_id": product["id"], "packs": 1, "expiry_date": later})
+
+    assert res.status_code == 200, res.text
+    updated = client.get(f"/api/inventory/{product['id']}", headers=headers).json()
+    assert updated["expiry_date"][:10] == soon.date().isoformat()
+
+
+# --------------------------------------------------------------------------
+# Batch-level stock (FEFO)
+# --------------------------------------------------------------------------
+def _lot(client, headers, item_id, *, qty, cost, days=None, batch_no=None):
+    """Receive one dated lot, without letting it rewrite the product's price."""
+    payload = {
+        "item_id": item_id, "packs": qty, "units_per_pack": 1,
+        "unit_cost": cost, "batch_no": batch_no, "remember": False,
+    }
+    if days is not None:
+        payload["expiry_date"] = (datetime.utcnow() + timedelta(days=days)).isoformat()
+    res = client.post("/api/intake/confirm", headers=headers, json=payload)
+    assert res.status_code == 200, res.text
+    return res.json()["line"]
+
+
+def _batches(client, headers, item_id):
+    return client.get(f"/api/inventory/{item_id}/batches", headers=headers).json()
+
+
+def test_sale_depletes_earliest_expiry_first(client, vendor):
+    headers, _ = vendor
+    product = _carton(client, headers, current_qty=0)
+    _lot(client, headers, product["id"], qty=6, cost=10.0, days=5, batch_no="SOON")
+    _lot(client, headers, product["id"], qty=10, cost=20.0, days=60, batch_no="LATER")
+
+    client.post("/api/sales", headers=headers,
+                json={"payment_mode": "cash", "items": [{"item_id": product["id"], "qty": 8}]})
+
+    remaining = {b["batch_no"]: b["qty_remaining"] for b in _batches(client, headers, product["id"])}
+    # The short-dated lot empties before the long-dated one is touched.
+    assert "SOON" not in remaining
+    assert remaining["LATER"] == 8
+
+
+def test_sale_cost_is_the_blend_of_lots_consumed(client, vendor):
+    headers, _ = vendor
+    product = _carton(client, headers, current_qty=0)
+    _lot(client, headers, product["id"], qty=6, cost=10.0, days=5, batch_no="SOON")
+    _lot(client, headers, product["id"], qty=10, cost=20.0, days=60, batch_no="LATER")
+
+    sale = client.post("/api/sales", headers=headers,
+                       json={"payment_mode": "cash",
+                             "items": [{"item_id": product["id"], "qty": 8}]}).json()["sale"]
+
+    # 6 units at Rs 10 plus 2 at Rs 20 is Rs 100 of goods, sold at 8 x Rs 14.
+    assert sale["total_amount"] == 112.0
+    assert sale["profit"] == 12.0
+
+
+def test_undated_lots_are_consumed_last(client, vendor):
+    headers, _ = vendor
+    product = _carton(client, headers, current_qty=0)
+    _lot(client, headers, product["id"], qty=5, cost=10.0, batch_no="NODATE")
+    _lot(client, headers, product["id"], qty=5, cost=10.0, days=30, batch_no="DATED")
+
+    client.post("/api/sales", headers=headers,
+                json={"payment_mode": "cash", "items": [{"item_id": product["id"], "qty": 5}]})
+
+    remaining = {b["batch_no"]: b["qty_remaining"] for b in _batches(client, headers, product["id"])}
+    # A lot with no date is not urgent, it is unknown -- dated stock moves first.
+    assert remaining == {"NODATE": 5}
+
+
+def test_void_returns_stock_to_its_own_lots(client, vendor):
+    headers, _ = vendor
+    product = _carton(client, headers, current_qty=0)
+    _lot(client, headers, product["id"], qty=6, cost=10.0, days=5, batch_no="SOON")
+    _lot(client, headers, product["id"], qty=10, cost=20.0, days=60, batch_no="LATER")
+
+    sale = client.post("/api/sales", headers=headers,
+                       json={"payment_mode": "cash",
+                             "items": [{"item_id": product["id"], "qty": 8}]}).json()["sale"]
+    client.delete(f"/api/sales/{sale['id']}", headers=headers)
+
+    remaining = {b["batch_no"]: b["qty_remaining"] for b in _batches(client, headers, product["id"])}
+    # Not all 8 onto the newest lot: each goes back where it came from.
+    assert remaining == {"SOON": 6, "LATER": 10}
+
+
+def test_two_lots_of_one_product_alert_separately(client, vendor):
+    headers, _ = vendor
+    product = _carton(client, headers, current_qty=0)
+    _lot(client, headers, product["id"], qty=4, cost=10.0, days=2, batch_no="URGENT")
+    _lot(client, headers, product["id"], qty=9, cost=12.0, days=6, batch_no="SOON")
+    _lot(client, headers, product["id"], qty=50, cost=15.0, days=300, batch_no="FINE")
+
+    expiring = client.get("/api/inventory/expiring-soon", headers=headers).json()
+
+    assert [row["batch_no"] for row in expiring] == ["URGENT", "SOON"]
+    assert expiring[0]["urgency"] == "critical"
+    # The money at risk is this lot's, not the whole shelf's.
+    assert expiring[0]["estimated_loss_risk"] == 40.0
+    assert expiring[1]["estimated_loss_risk"] == 108.0
+
+
+def test_current_qty_always_equals_the_sum_of_its_lots(client, vendor):
+    headers, _ = vendor
+    product = _carton(client, headers, current_qty=0)
+    _lot(client, headers, product["id"], qty=10, cost=10.0, days=5)
+    _lot(client, headers, product["id"], qty=7, cost=12.0, days=40)
+    client.post("/api/sales", headers=headers,
+                json={"payment_mode": "cash", "items": [{"item_id": product["id"], "qty": 12}]})
+    client.post(f"/api/inventory/{product['id']}/adjust", headers=headers,
+                json={"qty_change": -2, "reason": "Damaged"})
+
+    item = client.get(f"/api/inventory/{product['id']}", headers=headers).json()
+    lots = sum(b["qty_remaining"] for b in _batches(client, headers, product["id"]))
+    # The cached total on the product is the invariant this whole phase rests on.
+    assert item["current_qty"] == lots == 3
+
+
+def test_the_product_shows_the_soonest_live_lot(client, vendor):
+    headers, _ = vendor
+    product = _carton(client, headers, current_qty=0)
+    _lot(client, headers, product["id"], qty=3, cost=10.0, days=4, batch_no="SOON")
+    _lot(client, headers, product["id"], qty=8, cost=10.0, days=90, batch_no="LATER")
+
+    soon = client.get(f"/api/inventory/{product['id']}", headers=headers).json()["expiry_date"]
+
+    # Sell the short-dated lot out and the product's date moves to what is left.
+    client.post("/api/sales", headers=headers,
+                json={"payment_mode": "cash", "items": [{"item_id": product["id"], "qty": 3}]})
+    after = client.get(f"/api/inventory/{product['id']}", headers=headers).json()["expiry_date"]
+
+    assert after > soon
+    assert client.get("/api/inventory/expiring-soon", headers=headers).json() == []
+
+
+def test_undoing_a_delivery_that_has_been_sold_is_refused(client, vendor):
+    headers, _ = vendor
+    product = _carton(client, headers, current_qty=0)
+    line = _lot(client, headers, product["id"], qty=5, cost=10.0, days=30, batch_no="B1")
+
+    client.post("/api/sales", headers=headers,
+                json={"payment_mode": "cash", "items": [{"item_id": product["id"], "qty": 2}]})
+
+    res = client.delete(f"/api/intake/lines/{line['id']}", headers=headers)
+    # Un-selling is not undo's business; say so rather than inventing a number.
+    assert res.status_code == 409
+    assert "already been sold" in res.json()["detail"]
+
+
+def test_undoing_an_untouched_delivery_removes_its_lot(client, vendor):
+    headers, _ = vendor
+    product = _carton(client, headers, current_qty=0)
+    line = _lot(client, headers, product["id"], qty=5, cost=10.0, days=30, batch_no="B1")
+
+    assert client.delete(f"/api/intake/lines/{line['id']}", headers=headers).status_code == 204
+    assert _batches(client, headers, product["id"]) == []
+    assert client.get(f"/api/inventory/{product['id']}", headers=headers).json()["current_qty"] == 0
+
+
+def test_lots_are_scoped_to_one_vendor(client, vendor, item):
+    headers, _ = vendor
+    other_headers, _ = _other_vendor(client, "otherlots")
+
+    assert client.get(f"/api/inventory/{item['id']}/batches", headers=other_headers).status_code == 404
+    assert client.get("/api/inventory/expiring-soon", headers=other_headers).json() == []
+
+
+def test_an_opening_quantity_becomes_a_lot(client, vendor, item):
+    headers, _ = vendor
+    # The item fixture is created with 20 in stock; that has to be backed by a
+    # lot, or the first reconcile would reduce the product to nothing.
+    lots = _batches(client, headers, item["id"])
+    assert len(lots) == 1
+    assert lots[0]["qty_remaining"] == 20
+    assert lots[0]["unit_cost"] == 27.0
+
+
+def _edit(client, headers, item, **changes):
+    body = {
+        "sku_name": item["sku_name"], "category": item["category"], "unit": item["unit"],
+        "current_qty": item["current_qty"], "reorder_point": item["reorder_point"],
+        "cost_price": item["cost_price"], "selling_price": item["selling_price"],
+        "expiry_date": item.get("expiry_date"), "mfg_date": item.get("mfg_date"),
+        "barcode": item.get("barcode"), "pack_type": item.get("pack_type", "loose"),
+        "units_per_pack": item.get("units_per_pack", 1),
+        "hsn_code": item.get("hsn_code"), "gst_rate": item.get("gst_rate", 0),
+    }
+    body.update(changes)
+    res = client.put(f"/api/inventory/{item['id']}", headers=headers, json=body)
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def test_editing_a_product_dates_the_stock_it_already_has(client, vendor, item):
+    """The edit form has one expiry box, so it has to mean the shelf.
+
+    Applying it after the quantity change instead left the typed date on a small
+    new lot while the bulk of the stock stayed undated -- and FEFO then sold the
+    newest units first.
+    """
+    headers, _ = vendor
+    expiry = (datetime.utcnow() + timedelta(days=120)).isoformat()
+
+    updated = _edit(client, headers, item, current_qty=25, expiry_date=expiry)
+
+    lots = _batches(client, headers, item["id"])
+    assert updated["current_qty"] == 25
+    # One lot, all of it dated -- not 20 undated plus 5 dated.
+    assert len(lots) == 1
+    assert lots[0]["qty_remaining"] == 25
+    assert lots[0]["expiry_date"][:10] == expiry[:10]
+
+
+def test_reducing_the_quantity_on_a_product_takes_it_off_the_soonest_lot(client, vendor):
+    headers, _ = vendor
+    product = _carton(client, headers, current_qty=0)
+    _lot(client, headers, product["id"], qty=4, cost=10.0, days=3, batch_no="SOON")
+    _lot(client, headers, product["id"], qty=10, cost=10.0, days=90, batch_no="LATER")
+
+    current = client.get(f"/api/inventory/{product['id']}", headers=headers).json()
+    _edit(client, headers, current, current_qty=10)
+
+    remaining = {b["batch_no"]: b["qty_remaining"] for b in _batches(client, headers, product["id"])}
+    # A downward correction is spoilage or miscount on the oldest stock.
+    assert remaining == {"LATER": 10}
+
+
+def test_health_score_values_spoilage_from_lots(client, vendor):
+    """Reaches past the has_data guard, which every other analytics test stops at.
+
+    The spoilage term reads StockBatch now, so without a case that gets here a
+    typo in that query would only ever surface in front of a shopkeeper.
+    """
+    headers, _ = vendor
+    assert client.post("/api/demo/seed", headers=headers).status_code == 200
+
+    score = client.get("/api/analytics/health-score", headers=headers).json()
+
+    assert score["has_data"] is True
+    assert 0 <= score["health_score"] <= 100
+    assert "waste_control" in score["breakdown"]
+
+
+def test_seeded_stock_is_backed_by_lots(client, vendor):
+    headers, _ = vendor
+    client.post("/api/demo/seed", headers=headers)
+
+    for product in client.get("/api/inventory", headers=headers).json():
+        lots = _batches(client, headers, product["id"])
+        total = round(sum(b["qty_remaining"] for b in lots), 3)
+        # Sample data has to satisfy the same invariant as real data, or the
+        # first sale after a seed reconciles the shelf down to nothing.
+        assert total == product["current_qty"], product["sku_name"]
+
+
+# --------------------------------------------------------------------------
+# Authentication hardening
+# --------------------------------------------------------------------------
+def _start_login(client, identifier="testowner", password="a-good-password"):
+    return client.post("/api/auth/login", json={"identifier": identifier, "password": password})
+
+
+def test_the_otp_step_cannot_be_reached_without_the_password(client, vendor):
+    """The bypass this flow was built to close.
+
+    verify-otp used to take a vendor_id straight from the caller, so knowing an
+    account id was enough to finish signing in -- the password was decorative.
+    """
+    _, vendor_id = vendor
+
+    for forged in (vendor_id, "not-a-token", ""):
+        res = client.post("/api/auth/verify-otp", json={"challenge_token": forged, "otp": "123456"})
+        assert res.status_code in (401, 422), f"{forged!r} was accepted"
+
+
+def test_resend_otp_cannot_be_triggered_for_an_arbitrary_account(client, vendor):
+    """Unauthenticated resend used to issue a fresh code for any vendor_id --
+    free codes to brute force, and with a real provider, someone else's SMS bill."""
+    _, vendor_id = vendor
+    res = client.post("/api/auth/resend-otp", json={"challenge_token": vendor_id})
+    assert res.status_code in (401, 422)
+
+
+def test_a_challenge_token_is_not_a_session(client):
+    """Half a login is not a login."""
+    signup = client.post("/api/auth/signup", json={
+        "name": "Halfway", "username": "halfway", "email": "half@example.com",
+        "phone": "+91 9000000123", "password": "a-good-password",
+    }).json()
+
+    headers = {"Authorization": f"Bearer {signup['challenge_token']}"}
+    assert client.get("/api/inventory", headers=headers).status_code == 401
+    assert client.get("/api/vendor/me", headers=headers).status_code == 401
+
+
+def test_a_session_token_cannot_stand_in_for_the_otp_step(client, vendor):
+    headers, _ = vendor
+    token = headers["Authorization"].split()[1]
+    res = client.post("/api/auth/verify-otp", json={"challenge_token": token, "otp": "123456"})
+    assert res.status_code == 401
+
+
+def test_the_code_is_burned_after_repeated_wrong_guesses(client):
+    """A million possibilities is only a search space while the tries are few."""
+    signup = client.post("/api/auth/signup", json={
+        "name": "Guessed At", "username": "guessed", "email": "guessed@example.com",
+        "phone": "+91 9000000124", "password": "a-good-password",
+    }).json()
+    challenge = signup["challenge_token"]
+
+    statuses = [
+        client.post("/api/auth/verify-otp",
+                    json={"challenge_token": challenge, "otp": f"{i:06d}"}).status_code
+        for i in range(6)
+    ]
+    assert 429 in statuses, statuses
+
+    # The real code is dead too, so a guesser cannot simply carry on.
+    after = client.post("/api/auth/verify-otp", json={"challenge_token": challenge, "otp": "123456"})
+    assert after.status_code in (401, 429)
+
+
+def test_login_attempts_are_rate_limited(client, vendor):
+    statuses = [_start_login(client, password="wrong-password").status_code for _ in range(12)]
+    assert 429 in statuses, statuses
+
+
+def test_signup_is_rate_limited(client):
+    statuses = []
+    for i in range(7):
+        statuses.append(client.post("/api/auth/signup", json={
+            "name": f"Spam {i}", "username": f"spam{i}", "email": f"spam{i}@example.com",
+            "phone": f"+91 90000{i:05d}", "password": "a-good-password",
+        }).status_code)
+    assert 429 in statuses, statuses
+
+
+def test_changing_the_password_ends_other_sessions(client, vendor):
+    headers, _ = vendor
+    assert client.get("/api/vendor/me", headers=headers).status_code == 200
+
+    res = client.post("/api/auth/change-password", headers=headers, json={
+        "current_password": "a-good-password", "new_password": "an-even-better-password",
+    })
+    assert res.status_code == 204
+
+    # A token stolen before the change must stop working at the change.
+    assert client.get("/api/vendor/me", headers=headers).status_code == 401
+
+
+def test_change_password_rejects_the_wrong_current_password(client, vendor):
+    headers, _ = vendor
+    res = client.post("/api/auth/change-password", headers=headers, json={
+        "current_password": "not-my-password", "new_password": "an-even-better-password",
+    })
+    assert res.status_code == 401
+    assert client.get("/api/vendor/me", headers=headers).status_code == 200
+
+
+def test_signing_out_everywhere_invalidates_the_token(client, vendor):
+    """What a shopkeeper needs after losing the phone: clearing a browser only
+    forgets the token locally."""
+    headers, _ = vendor
+    assert client.post("/api/auth/logout-all", headers=headers).status_code == 204
+    assert client.get("/api/vendor/me", headers=headers).status_code == 401
+
+
+def test_weak_passwords_are_rejected(client):
+    for password in ("short1", "password123", "aaaaaaaaaaaa"):
+        res = client.post("/api/auth/signup", json={
+            "name": "Weak", "username": "weakling", "email": "weak@example.com",
+            "phone": "+91 9000000125", "password": password,
+        })
+        assert res.status_code == 422, f"{password!r} was accepted"
+
+
+# --------------------------------------------------------------------------
+# Transport and exposure
+# --------------------------------------------------------------------------
+def test_responses_carry_security_headers(client):
+    headers = client.get("/api/health").headers
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    assert headers["X-Frame-Options"] == "DENY"
+    assert "frame-ancestors 'none'" in headers["Content-Security-Policy"]
+    assert headers["Referrer-Policy"] == "no-referrer"
+    # Shop data and tokens must not sit in a shared cache.
+    assert headers["Cache-Control"] == "no-store"
+
+
+def test_health_does_not_advertise_the_configuration(client):
+    body = client.get("/api/health").json()
+    # It used to report debug_otp, telling an anonymous caller whether the fixed
+    # code would work before they tried it.
+    assert body == {"status": "ok"}
+
+
+def test_oversized_line_item_lists_are_rejected(client, vendor, item):
+    headers, _ = vendor
+    res = client.post("/api/sales", headers=headers, json={
+        "payment_mode": "cash",
+        "items": [{"item_id": item["id"], "qty": 1}] * 500,
+    })
+    assert res.status_code == 422
+
+
+def test_production_configuration_is_validated():
+    """The guard that stops an unsafe deployment from ever serving."""
+    import config
+
+    problems = config.validate_for_production()
+    joined = " ".join(problems).lower()
+    # The suite runs with DEBUG_OTP and DEMO_MODE on, so both must be named.
+    assert any("debug_otp" in p.lower() for p in problems), problems
+    assert "demo_mode" in joined
+
+
+# --------------------------------------------------------------------------
+# Password reset
+# --------------------------------------------------------------------------
+def test_forgot_password_answers_the_same_for_unknown_accounts(client, vendor):
+    """Saying "no such account" here would be a free account-enumeration tool."""
+    known = client.post("/api/auth/forgot-password", json={"identifier": "testowner"})
+    unknown = client.post("/api/auth/forgot-password", json={"identifier": "nobody-at-all"})
+
+    assert known.status_code == unknown.status_code == 202
+    assert known.json() == unknown.json()
+
+
+def test_a_reset_link_changes_the_password_once(client, vendor, monkeypatch):
+    import notifications
+
+    sent = {}
+
+    def capture(to, link):
+        sent["link"] = link
+        return notifications.DeliveryResult(True, "captured")
+
+    monkeypatch.setattr(notifications, "send_password_reset", capture)
+
+    headers, _ = vendor
+    client.post("/api/auth/forgot-password", json={"identifier": "testowner"})
+    token = sent["link"].split("token=")[1]
+
+    first = client.post("/api/auth/reset-password", json={
+        "reset_token": token, "new_password": "a-brand-new-password"})
+    assert first.status_code == 204
+
+    # The link is single use: a reset mail sitting in an inbox is not a key.
+    second = client.post("/api/auth/reset-password", json={
+        "reset_token": token, "new_password": "yet-another-password"})
+    assert second.status_code == 400
+
+    # And the reset ended every session that existed before it.
+    assert client.get("/api/vendor/me", headers=headers).status_code == 401
+
+    challenge = client.post("/api/auth/login", json={
+        "identifier": "testowner", "password": "a-brand-new-password"}).json()
+    assert challenge.get("challenge_token")
+
+
+def test_a_forged_reset_token_is_rejected(client, vendor):
+    headers, _ = vendor
+    session_token = headers["Authorization"].split()[1]
+    for token in (session_token, "not-a-token-at-all", "aaa.bbb.ccc"):
+        res = client.post("/api/auth/reset-password", json={
+            "reset_token": token, "new_password": "a-brand-new-password"})
+        # 400 for a well-formed but invalid token, 422 for one that is not even
+        # the right shape -- both are refusals.
+        assert res.status_code in (400, 422), token
+
+
+def test_weak_passwords_are_rejected_on_reset(client, vendor):
+    res = client.post("/api/auth/reset-password", json={
+        "reset_token": "x" * 40, "new_password": "password123"})
+    assert res.status_code == 422
+
+
+# --------------------------------------------------------------------------
+# Delivery
+# --------------------------------------------------------------------------
+def test_codes_are_actually_handed_to_the_provider(client, monkeypatch):
+    """Before this, codes were hashed, stored, and delivered to nobody."""
+    import notifications
+
+    calls = []
+    monkeypatch.setattr(
+        notifications,
+        "send_otp",
+        lambda to, code: calls.append((to, code)) or notifications.DeliveryResult(True),
+    )
+
+    client.post("/api/auth/signup", json={
+        "name": "Delivered", "username": "delivered", "email": "d@example.com",
+        "phone": "+91 9000000321", "password": "a-good-password",
+    })
+    assert len(calls) == 1
+    assert calls[0][0] == "+91 9000000321"
+    assert len(calls[0][1]) == 6
+
+
+def test_no_provider_configured_is_reported_not_raised(monkeypatch):
+    import notifications
+    from config import settings
+
+    monkeypatch.setattr(settings, "NOTIFY_PROVIDER", "none")
+    result = notifications.send_otp("+91 9000000000", "123456")
+    # A missing provider must not take a request down with a 500.
+    assert result.delivered is False
+    assert "provider" in result.detail
+
+
+# --------------------------------------------------------------------------
+# Deliveries list and purchase register
+# --------------------------------------------------------------------------
+def test_sessions_list_carries_totals_and_filters(client, vendor):
+    headers, _ = vendor
+    product = _carton(client, headers, current_qty=0)
+    _lot(client, headers, product["id"], qty=4, cost=25.0, days=90, batch_no="R1")
+
+    intake_id = client.get("/api/intake/session/current", headers=headers).json()["id"]
+    client.put(f"/api/intake/session/{intake_id}", headers=headers,
+               json={"supplier_name": "Register Traders"})
+
+    rows = client.get("/api/intake/sessions", headers=headers).json()
+    assert len(rows) == 1
+    # Totalled server-side, so listing fifty deliveries is one request not fifty-one.
+    assert rows[0]["line_count"] == 1
+    assert rows[0]["total_units"] == 4
+    # 4 x Rs 25 is Rs 100 taxable, plus the carton fixture's 12% GST.
+    assert rows[0]["taxable_value"] == 100.0
+    assert rows[0]["grand_total"] == 112.0
+
+    assert client.get("/api/intake/sessions", headers=headers,
+                      params={"status": "closed"}).json() == []
+    assert len(client.get("/api/intake/sessions", headers=headers,
+                          params={"supplier": "register"}).json()) == 1
+
+
+def test_purchase_register_totals_the_month(client, vendor):
+    headers, _ = vendor
+    client.put("/api/vendor/me", headers=headers, json={
+        "name": "Test Owner", "store_name": "Test Store", "gstin": "27AAPFU0939F1ZV"})
+
+    product = _carton(client, headers, current_qty=0)   # 12% GST
+    _lot(client, headers, product["id"], qty=10, cost=20.0, days=90)
+    intake_id = client.get("/api/intake/session/current", headers=headers).json()["id"]
+    client.post(f"/api/intake/session/{intake_id}/close", headers=headers)
+
+    month = datetime.utcnow().strftime("%Y-%m")
+    register = client.get("/api/intake/register", headers=headers, params={"month": month}).json()
+
+    assert register["totals"]["deliveries"] == 1
+    assert register["totals"]["taxable_value"] == 200.0
+    # An open delivery is not a filing; only closed ones count.
+    assert all(e["id"] == intake_id for e in register["entries"])
+
+    empty = client.get("/api/intake/register", headers=headers, params={"month": "2001-01"}).json()
+    assert empty["totals"]["deliveries"] == 0
+
+
+def test_register_rejects_a_nonsense_month(client, vendor):
+    headers, _ = vendor
+    assert client.get("/api/intake/register", headers=headers,
+                      params={"month": "not-a-month"}).status_code == 422
+    assert client.get("/api/intake/register", headers=headers,
+                      params={"month": "2026-13"}).status_code == 422
+
+
+def test_a_closed_delivery_can_be_reopened_until_it_sells(client, vendor):
+    headers, _ = vendor
+    product = _carton(client, headers, current_qty=0)
+    _lot(client, headers, product["id"], qty=6, cost=10.0, days=60, batch_no="RO")
+    intake_id = client.get("/api/intake/session/current", headers=headers).json()["id"]
+    client.post(f"/api/intake/session/{intake_id}/close", headers=headers)
+
+    reopened = client.post(f"/api/intake/session/{intake_id}/reopen", headers=headers)
+    assert reopened.status_code == 200
+    assert reopened.json()["status"] == "open"
+
+    client.post(f"/api/intake/session/{intake_id}/close", headers=headers)
+    client.post("/api/sales", headers=headers,
+                json={"payment_mode": "cash", "items": [{"item_id": product["id"], "qty": 2}]})
+
+    # Once it has traded, editing history would make the numbers disagree with
+    # what happened; a correcting intake is the honest fix.
+    assert client.post(f"/api/intake/session/{intake_id}/reopen",
+                       headers=headers).status_code == 409
+
+
+def test_deliveries_are_scoped_to_one_vendor(client, vendor):
+    headers, _ = vendor
+    product = _carton(client, headers, current_qty=0)
+    _lot(client, headers, product["id"], qty=2, cost=10.0, days=30)
+    intake_id = client.get("/api/intake/session/current", headers=headers).json()["id"]
+
+    other_headers, _ = _other_vendor(client, "otherregister")
+    assert client.get("/api/intake/sessions", headers=other_headers).json() == []
+    assert client.post(f"/api/intake/session/{intake_id}/reopen",
+                       headers=other_headers).status_code == 404
+    month = datetime.utcnow().strftime("%Y-%m")
+    assert client.get("/api/intake/register", headers=other_headers,
+                      params={"month": month}).json()["totals"]["deliveries"] == 0
+
+
+# --------------------------------------------------------------------------
+# Short-dated goods
+# --------------------------------------------------------------------------
+def test_a_carton_scan_flags_short_dated_stock(client, vendor):
+    headers, _ = vendor
+    soon = (datetime.utcnow() + timedelta(days=9)).isoformat()
+    product = _carton(client, headers, current_qty=0, expiry_date=soon)
+
+    body = client.post("/api/intake/scan", headers=headers,
+                       json={"barcode": product["barcode"]}).json()
+
+    # The confirm step is the last moment the carton can still be refused.
+    assert body["suggestion"]["short_dated"] is True
+    assert body["suggestion"]["days_to_expiry"] <= 9
+
+
+def test_long_dated_stock_is_not_flagged(client, vendor):
+    headers, _ = vendor
+    later = (datetime.utcnow() + timedelta(days=200)).isoformat()
+    product = _carton(client, headers, current_qty=0, expiry_date=later)
+
+    body = client.post("/api/intake/scan", headers=headers,
+                       json={"barcode": product["barcode"]}).json()
+    assert body["suggestion"]["short_dated"] is False

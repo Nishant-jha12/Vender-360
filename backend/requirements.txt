@@ -9,6 +9,10 @@ pydantic==2.3.0
 qrcode==7.4.2
 pillow==10.4.0
 
+# Postgres driver. SQLite is the default and needs nothing; this is here so
+# DATABASE_URL=postgresql+psycopg://... works without a second install step.
+psycopg[binary]==3.2.3
+
 # Tests
 pytest==7.4.4
 httpx==0.25.2

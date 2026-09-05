@@ -85,7 +85,9 @@ export default function ExpiryAlert({ compact = false }) {
           const isCritical = item.urgency === 'critical';
           return (
             <article
-              key={item.id}
+              // One row per lot, so two batches of the same product must not
+              // collide on the product's id.
+              key={item.batch_id || item.id}
               className={`rounded-2xl p-3.5 border ${
                 isCritical ? 'bg-brand-danger/5 border-brand-danger/25' : 'bg-brand-amber/5 border-brand-amber/25'
               }`}
@@ -94,7 +96,8 @@ export default function ExpiryAlert({ compact = false }) {
                 <div className="min-w-0">
                   <h4 className="font-bold text-sm text-brand-ink leading-tight">{item.sku_name}</h4>
                   <p className="text-[11px] text-brand-muted mt-0.5">
-                    {fmtQty(item.current_qty)} {item.unit} in stock, cost {money(item.cost_price)}
+                    {fmtQty(item.qty_at_risk ?? item.current_qty)} {item.unit} at risk
+                    {item.batch_no && <> · batch {item.batch_no}</>}
                   </p>
                 </div>
                 <span

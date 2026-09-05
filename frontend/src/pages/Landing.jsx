@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { ArrowRight, BarChart3, Smartphone, Zap, ShieldCheck } from 'lucide-react';
+import { ArrowRight, BarChart3, Smartphone, Zap } from 'lucide-react';
 
 export default function Landing() {
   return (

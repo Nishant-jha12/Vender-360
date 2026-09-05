@@ -1,0 +1,53 @@
+# Vendor360, end to end.
+#
+#     cp backend/.env.example backend/.env    # then edit it
+#     docker compose up --build
+#
+# The api service reads backend/.env. With APP_ENV=production it refuses to
+# start unless SECRET_KEY is set, DEBUG_OTP and DEMO_MODE are off, rate limiting
+# is on, and a delivery provider is configured -- see validate_for_production().
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: vendor360
+      POSTGRES_USER: vendor360
+      # Change this, and keep it out of version control.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-in-your-env}
+    volumes:
+      - vendor360-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vendor360"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    build: ./backend
+    env_file:
+      - backend/.env
+    environment:
+      # Overrides .env so the container talks to the db service, not a local file.
+      DATABASE_URL: postgresql+psycopg://vendor360:${POSTGRES_PASSWORD:-change-me-in-your-env}@db:5432/vendor360
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://127.0.0.1:8000/api}
+    depends_on:
+      - api
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  vendor360-db:

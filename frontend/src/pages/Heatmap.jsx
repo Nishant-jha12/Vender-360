@@ -3,9 +3,9 @@ import axios from 'axios';
 import { api } from '../lib/api';
 import { DemoNotice } from '../components/States';
 import { 
-  Flame, TrendingUp, Map as MapIcon, Crosshair, Loader2, Search, 
-  ExternalLink, Navigation, Layers, Sparkles, Filter, Store, IndianRupee,
-  Truck, Building2, ShoppingBag, Eye, Phone, Sliders, Radio
+  Flame,  Map as MapIcon, Crosshair, Loader2, Search, 
+  ExternalLink, Navigation, Layers,  Store, IndianRupee,
+  Truck, Building2,  Eye, Phone,  Radio
 } from 'lucide-react';
 import { MapContainer, TileLayer, CircleMarker, Circle, Popup, useMap, useMapEvents } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -76,7 +76,7 @@ const CATEGORIES = [
 
 export default function Heatmap() {
   const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [, setLoading] = useState(true);
   const [locating, setLocating] = useState(false);
   const [centerPosition, setCenterPosition] = useState([18.5204, 73.8567]);
   const [activeStyle, setActiveStyle] = useState('osm');
@@ -99,7 +99,7 @@ export default function Heatmap() {
         }
       });
       setData(res.data);
-    } catch (err) {
+    } catch {
       console.error("Failed to fetch heatmap data:", err);
     } finally {
       setLoading(false);
@@ -180,7 +180,7 @@ export default function Heatmap() {
       } else {
         alert("Location not found in India. Try another landmark.");
       }
-    } catch (err) {
+    } catch {
       alert("Location search service unavailable.");
     } finally {
       setIsSearching(false);
