@@ -61,7 +61,45 @@ def _wipe_vendor_data(vendor: models.Vendor, db: Session) -> None:
             models.KhataTransaction.customer_id.in_(customer_ids)
         ).delete(synchronize_session=False)
 
-    for model in (models.Sale, models.Transaction, models.InventoryItem, models.Customer):
+    item_ids = [
+        row.id
+        for row in db.query(models.InventoryItem.id).filter(
+            models.InventoryItem.vendor_id == vendor.id
+        )
+    ]
+    if item_ids:
+        batch_ids = [
+            row.id
+            for row in db.query(models.StockBatch.id).filter(
+                models.StockBatch.item_id.in_(item_ids)
+            )
+        ]
+        if batch_ids:
+            db.query(models.SaleItemBatch).filter(
+                models.SaleItemBatch.batch_id.in_(batch_ids)
+            ).delete(synchronize_session=False)
+        db.query(models.StockBatch).filter(
+            models.StockBatch.item_id.in_(item_ids)
+        ).delete(synchronize_session=False)
+
+    intake_ids = [
+        row.id
+        for row in db.query(models.StockIntake.id).filter(
+            models.StockIntake.vendor_id == vendor.id
+        )
+    ]
+    if intake_ids:
+        db.query(models.StockIntakeLine).filter(
+            models.StockIntakeLine.intake_id.in_(intake_ids)
+        ).delete(synchronize_session=False)
+
+    for model in (
+        models.Sale,
+        models.Transaction,
+        models.StockIntake,
+        models.InventoryItem,
+        models.Customer,
+    ):
         db.query(model).filter(model.vendor_id == vendor.id).delete(synchronize_session=False)
     db.commit()
 
@@ -101,6 +139,22 @@ def seed_demo_data(
         db.add(item)
         items.append(item)
         weights.append(popularity)
+    db.flush()
+
+    # Stock lives in lots, so sample stock needs one each -- otherwise the first
+    # sale reconciles these products down to nothing.
+    for item in items:
+        db.add(
+            models.StockBatch(
+                vendor_id=vendor.id,
+                item_id=item.id,
+                qty_received=item.current_qty,
+                qty_remaining=item.current_qty,
+                unit_cost=item.cost_price,
+                expiry_date=item.expiry_date,
+                received_at=now,
+            )
+        )
     db.flush()
 
     customers = []

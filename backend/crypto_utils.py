@@ -86,11 +86,32 @@ def _sign(signing_input: bytes, secret: str) -> str:
     return _b64url_encode(hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest())
 
 
-def create_access_token(subject: str, secret: str, expires_minutes: int) -> str:
+# Tokens carry what they are for. A half-finished login holds a challenge token,
+# and it must never be usable as a session -- so the purpose is signed in, and
+# checked on the way back out.
+PURPOSE_ACCESS = "access"
+PURPOSE_CHALLENGE = "otp_challenge"
+PURPOSE_RESET = "password_reset"
+
+
+def create_access_token(
+    subject: str,
+    secret: str,
+    expires_minutes: int,
+    *,
+    purpose: str = PURPOSE_ACCESS,
+    epoch: int = 0,
+    nonce: str = "",
+) -> str:
     now = int(time.time())
     header = {"alg": "HS256", "typ": "JWT"}
     payload = {
         "sub": subject,
+        "purpose": purpose,
+        # Bumped on the account when every existing session must stop working:
+        # a password change, or signing out everywhere.
+        "epoch": int(epoch),
+        "nonce": nonce,
         "iat": now,
         "exp": now + expires_minutes * 60,
         "jti": secrets.token_hex(8),
@@ -101,8 +122,8 @@ def create_access_token(subject: str, secret: str, expires_minutes: int) -> str:
     return f"{header_segment}.{payload_segment}.{_sign(signing_input, secret)}"
 
 
-def decode_access_token(token: str, secret: str) -> dict:
-    """Verify signature and expiry. Raises ValueError on any problem."""
+def decode_access_token(token: str, secret: str, *, purpose: str = PURPOSE_ACCESS) -> dict:
+    """Verify signature, purpose and expiry. Raises ValueError on any problem."""
     parts = token.split(".")
     if len(parts) != 3:
         raise ValueError("Malformed token")
@@ -122,6 +143,11 @@ def decode_access_token(token: str, secret: str) -> dict:
     # {"alg": "none"} can never be honoured.
     if header.get("alg") != "HS256":
         raise ValueError("Unexpected algorithm")
+
+    # Tokens minted before this claim existed default to access, so an old
+    # session stays valid -- but a challenge token can never pass as one.
+    if payload.get("purpose", PURPOSE_ACCESS) != purpose:
+        raise ValueError("Token is not valid for this use")
 
     if int(payload.get("exp", 0)) < int(time.time()):
         raise ValueError("Token expired")

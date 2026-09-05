@@ -120,11 +120,19 @@ def health_score(
     inventory_turnover = min(100, round((units_sold / units_held) * 100))
 
     # 3. Spoilage risk: value already expired against total stock value.
-    stock_value = sum((i.current_qty or 0) * (i.cost_price or 0) for i in items) or 1
+    # Measured per lot, so a product holding good stock alongside expired stock
+    # is penalised for the expired part only.
+    batches = (
+        db.query(models.StockBatch)
+        .filter(
+            models.StockBatch.vendor_id == vendor.id,
+            models.StockBatch.qty_remaining > 0,
+        )
+        .all()
+    )
+    stock_value = sum(b.value_at_cost for b in batches) or 1
     expired_value = sum(
-        (i.current_qty or 0) * (i.cost_price or 0)
-        for i in items
-        if i.expiry_date and i.expiry_date < now
+        b.value_at_cost for b in batches if b.expiry_date and b.expiry_date < now
     )
     waste_pct = round((expired_value / stock_value) * 100)
     waste_control = max(0, 100 - waste_pct * 3)  # spoilage is penalised steeply

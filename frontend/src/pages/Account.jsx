@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  Database, Globe, Hash, Loader2, LogOut, Package, Save, ShieldCheck, Smartphone, Store, User,
+  Database, FileText, Globe, Hash, Loader2, LogOut, Package, Save, ShieldCheck, Smartphone,
+  Store, User,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { api, errorMessage } from '../lib/api';
@@ -20,7 +21,7 @@ export default function Account() {
   const health = useApi('/analytics/health-score');
 
   const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({ name: '', store_name: '', phone: '', upi_id: '' });
+  const [form, setForm] = useState({ name: '', store_name: '', phone: '', upi_id: '', gstin: '' });
   const [saving, setSaving] = useState(false);
   const [seeding, setSeeding] = useState(false);
 
@@ -31,6 +32,7 @@ export default function Account() {
         store_name: profile.store_name || '',
         phone: profile.phone || '',
         upi_id: profile.upi_id || '',
+        gstin: profile.gstin || '',
       });
     }
   }, [profile]);
@@ -43,6 +45,7 @@ export default function Account() {
         store_name: form.store_name,
         phone: form.phone || null,
         upi_id: form.upi_id || null,
+        gstin: form.gstin || null,
       });
       setData(res.data);
       await refreshVendor();
@@ -133,6 +136,21 @@ export default function Account() {
               Every QR you generate collects payment to this ID, so make sure it is your own.
             </p>
           </div>
+
+          <div className="space-y-1">
+            <label className="text-[11px] font-bold text-brand-muted uppercase tracking-wider flex items-center gap-1.5">
+              <FileText size={12} /> GSTIN
+            </label>
+            {editing ? (
+              <input value={form.gstin} onChange={(e) => setForm({ ...form, gstin: e.target.value.toUpperCase() })} className={`${inputClass} font-mono`} placeholder="27AAPFU0939F1ZV" maxLength={15} />
+            ) : (
+              <p className="text-sm font-medium text-brand-ink">{profile.gstin || 'Not set'}</p>
+            )}
+            <p className="text-[11px] text-brand-muted leading-relaxed">
+              Printed on stock-intake summaries. Without it they are stock records rather than
+              input-tax claims.
+            </p>
+          </div>
         </div>
 
         {editing && (
@@ -143,6 +161,7 @@ export default function Account() {
                 setForm({
                   name: profile.name, store_name: profile.store_name,
                   phone: profile.phone || '', upi_id: profile.upi_id || '',
+                  gstin: profile.gstin || '',
                 });
               }}
               className="flex-1 py-2.5 rounded-2xl border border-brand-border text-brand-ink font-semibold bg-brand-surface text-sm"

@@ -4,22 +4,63 @@ Response models matter for more than tidiness here: the original build returned
 raw SQLAlchemy objects, which leaked internal columns (vendor_id, sync_status)
 straight to the browser.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+def as_naive_utc(value: Optional[datetime]) -> Optional[datetime]:
+    """Reduce an incoming datetime to the one kind this app stores.
+
+    Browsers send Date.toISOString(), which carries a trailing Z, so Pydantic
+    hands back a timezone-aware value -- while the database and every comparison
+    in this codebase are naive UTC. Mixing the two raises "can't compare
+    offset-naive and offset-aware datetimes" exactly where it matters most:
+    working out which stock on the shelf expires first.
+    """
+    if value is None or value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 # --------------------------------------------------------------------------
 # Auth
 # --------------------------------------------------------------------------
+# The handful of passwords that turn up first in every credential-stuffing list.
+# Not a substitute for a breach corpus, but it costs nothing and stops the worst.
+_COMMON_PASSWORDS = {
+    "password", "password1", "password123", "12345678", "123456789", "1234567890",
+    "qwertyuiop", "qwerty123", "iloveyou", "welcome1", "admin123", "letmein123",
+    "abc12345", "passw0rd", "vendor360", "shopkeeper", "changeme", "secret123",
+}
+
+
+def _reject_weak_password(value: str) -> str:
+    cleaned = value.strip()
+    if len(cleaned) < 10:
+        raise ValueError("Use at least 10 characters")
+    if cleaned.lower() in _COMMON_PASSWORDS:
+        raise ValueError("That password is too common. Pick something else")
+    if len(set(cleaned)) < 4:
+        raise ValueError("That password repeats too few characters")
+    return cleaned
+
+
 class SignupRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     username: str = Field(min_length=3, max_length=40)
     email: str = Field(min_length=3, max_length=200)
     phone: str = Field(min_length=6, max_length=20)
-    password: str = Field(min_length=8, max_length=200)
+    # Ten, not eight: length is the only thing that reliably buys time against
+    # an offline attack on a stolen hash.
+    password: str = Field(min_length=10, max_length=200)
     store_name: Optional[str] = Field(default=None, max_length=140)
+
+    @field_validator("password")
+    @classmethod
+    def strong_enough(cls, v: str) -> str:
+        return _reject_weak_password(v)
 
     @field_validator("username")
     @classmethod
@@ -44,13 +85,45 @@ class LoginRequest(BaseModel):
 
 
 class OTPRequest(BaseModel):
-    vendor_id: str
+    # The signed proof that the password step just succeeded. This replaced a
+    # client-supplied vendor_id, which let anyone holding an account id skip
+    # the password entirely and brute-force the code.
+    challenge_token: str = Field(min_length=10, max_length=2000)
     otp: str = Field(min_length=4, max_length=8)
+
+
+class ResendOTPRequest(BaseModel):
+    challenge_token: str = Field(min_length=10, max_length=2000)
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=200)
+    new_password: str = Field(min_length=10, max_length=200)
+
+    @field_validator("new_password")
+    @classmethod
+    def not_trivially_weak(cls, v: str) -> str:
+        return _reject_weak_password(v)
+
+
+class ForgotPasswordRequest(BaseModel):
+    identifier: str = Field(min_length=1, max_length=200)
+
+
+class ResetPasswordRequest(BaseModel):
+    reset_token: str = Field(min_length=10, max_length=2000)
+    new_password: str = Field(min_length=10, max_length=200)
+
+    @field_validator("new_password")
+    @classmethod
+    def not_trivially_weak(cls, v: str) -> str:
+        return _reject_weak_password(v)
 
 
 class ChallengeResponse(BaseModel):
     message: str
     vendor_id: str
+    challenge_token: str
     # Only populated when DEBUG_OTP is on, so the flow is testable without SMS.
     debug_otp: Optional[str] = None
 
@@ -72,6 +145,17 @@ class VendorUpdate(BaseModel):
     store_name: str = Field(min_length=1, max_length=140)
     phone: Optional[str] = Field(default=None, max_length=20)
     upi_id: Optional[str] = Field(default=None, max_length=100)
+    gstin: Optional[str] = Field(default=None, max_length=20)
+
+    @field_validator("gstin")
+    @classmethod
+    def gstin_shape(cls, v: Optional[str]) -> Optional[str]:
+        if v is None or not v.strip():
+            return None
+        cleaned = v.strip().upper()
+        if len(cleaned) != 15 or not cleaned.isalnum():
+            raise ValueError("A GSTIN is 15 letters and digits")
+        return cleaned
 
     @field_validator("upi_id")
     @classmethod
@@ -93,6 +177,7 @@ class VendorResponse(BaseModel):
     store_name: str
     phone: Optional[str] = None
     upi_id: Optional[str] = None
+    gstin: Optional[str] = None
     total_items: int = 0
 
 
@@ -108,7 +193,22 @@ class InventoryItemBase(BaseModel):
     cost_price: float = Field(default=0, ge=0)
     selling_price: float = Field(default=0, ge=0)
     expiry_date: Optional[datetime] = None
+    mfg_date: Optional[datetime] = None
     barcode: Optional[str] = Field(default=None, max_length=64)
+    pack_type: str = Field(default="loose")
+    units_per_pack: float = Field(default=1, gt=0)
+    hsn_code: Optional[str] = Field(default=None, max_length=12)
+    gst_rate: float = Field(default=0, ge=0, le=100)
+
+    _naive_dates = field_validator("expiry_date", "mfg_date")(as_naive_utc)
+
+    @field_validator("pack_type")
+    @classmethod
+    def known_pack_type(cls, v: str) -> str:
+        cleaned = (v or "loose").strip().lower()
+        if cleaned not in ("loose", "carton"):
+            raise ValueError("pack_type must be 'loose' or 'carton'")
+        return cleaned
 
 
 class InventoryItemCreate(InventoryItemBase):
@@ -131,7 +231,12 @@ class InventoryItemResponse(BaseModel):
     cost_price: float
     selling_price: float
     expiry_date: Optional[datetime] = None
+    mfg_date: Optional[datetime] = None
     barcode: Optional[str] = None
+    pack_type: Optional[str] = "loose"
+    units_per_pack: Optional[float] = 1.0
+    hsn_code: Optional[str] = None
+    gst_rate: Optional[float] = 0.0
     sale_count: Optional[int] = 0
     last_updated: Optional[datetime] = None
 
@@ -148,12 +253,31 @@ class StockAdjustRequest(BaseModel):
         return v
 
 
+class StockBatchResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    batch_no: Optional[str] = None
+    mfg_date: Optional[datetime] = None
+    expiry_date: Optional[datetime] = None
+    qty_received: float
+    qty_remaining: float
+    unit_cost: float
+    received_at: datetime
+    value_at_cost: float
+
+
 class ExpiringItemResponse(InventoryItemResponse):
     days_left: int
     urgency: str
     estimated_loss_risk: float
     suggested_discount_pct: int
     suggested_price: float
+    # Each row is one lot: expiry_date and current_qty above describe that lot,
+    # not the product's whole shelf.
+    batch_id: Optional[str] = None
+    batch_no: Optional[str] = None
+    qty_at_risk: float = 0.0
 
 
 # --------------------------------------------------------------------------
@@ -167,7 +291,7 @@ class SaleLineRequest(BaseModel):
 
 
 class SaleCreateRequest(BaseModel):
-    items: List[SaleLineRequest] = Field(min_length=1)
+    items: List[SaleLineRequest] = Field(min_length=1, max_length=200)
     payment_mode: str
     customer_id: Optional[str] = None
     note: Optional[str] = Field(default=None, max_length=200)
@@ -246,3 +370,92 @@ class CustomerResponse(BaseModel):
     total_credit_balance: float
     created_at: datetime
     khata_transactions: List[KhataTransactionResponse] = []
+
+
+# --------------------------------------------------------------------------
+# Stock intake (scanner)
+# --------------------------------------------------------------------------
+class IntakeScanRequest(BaseModel):
+    """One scan at the counter. Either a barcode off the camera or a chosen item."""
+
+    barcode: Optional[str] = Field(default=None, max_length=64)
+    item_id: Optional[str] = None
+    # Loose items default to one unit per scan; cartons to one case.
+    packs: float = Field(default=1, gt=0)
+
+    @field_validator("barcode")
+    @classmethod
+    def tidy_barcode(cls, v: Optional[str]) -> Optional[str]:
+        cleaned = (v or "").strip()
+        return cleaned or None
+
+
+class IntakeConfirmRequest(BaseModel):
+    """Commit a scan the shopkeeper has reviewed -- the carton path, or a loose
+    line they want to correct before it is written."""
+
+    item_id: str
+    packs: float = Field(default=1, gt=0)
+    units_per_pack: Optional[float] = Field(default=None, gt=0)
+    unit_cost: Optional[float] = Field(default=None, ge=0)
+    unit_price: Optional[float] = Field(default=None, ge=0)
+    gst_rate: Optional[float] = Field(default=None, ge=0, le=100)
+    hsn_code: Optional[str] = Field(default=None, max_length=12)
+    batch_no: Optional[str] = Field(default=None, max_length=40)
+    mfg_date: Optional[datetime] = None
+    expiry_date: Optional[datetime] = None
+    # Write the pack size and tax details back onto the product, so the next
+    # scan of the same carton needs no typing at all.
+    remember: bool = True
+
+    _naive_dates = field_validator("mfg_date", "expiry_date")(as_naive_utc)
+
+
+class IntakeSessionUpdate(BaseModel):
+    supplier_name: Optional[str] = Field(default=None, max_length=140)
+    supplier_gstin: Optional[str] = Field(default=None, max_length=20)
+    invoice_no: Optional[str] = Field(default=None, max_length=60)
+    invoice_date: Optional[datetime] = None
+    note: Optional[str] = Field(default=None, max_length=200)
+
+    _naive_dates = field_validator("invoice_date")(as_naive_utc)
+
+
+class IntakeLineResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    item_id: Optional[str] = None
+    sku_name: str
+    barcode: Optional[str] = None
+    hsn_code: Optional[str] = None
+    pack_type: str
+    packs: float
+    units_per_pack: float
+    qty_units: float
+    unit_cost: float
+    unit_price: float
+    gst_rate: float
+    batch_no: Optional[str] = None
+    mfg_date: Optional[datetime] = None
+    expiry_date: Optional[datetime] = None
+    source: str
+    created_at: datetime
+    taxable_value: float
+    gst_amount: float
+    line_total: float
+
+
+class IntakeSessionResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    status: str
+    supplier_name: Optional[str] = None
+    supplier_gstin: Optional[str] = None
+    invoice_no: Optional[str] = None
+    invoice_date: Optional[datetime] = None
+    note: Optional[str] = None
+    started_at: datetime
+    closed_at: Optional[datetime] = None
+    lines: List[IntakeLineResponse] = []

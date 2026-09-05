@@ -1,4 +1,23 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Roboto:wght@400;500;700&display=swap');
+/* Fonts are served from this app, never from a third party.
+   The previous @import pulled Inter and Roboto from fonts.googleapis.com, which
+   sent every visitor IP, User-Agent and referring page to Google before anyone
+   had even signed in. Run `npm run fonts` to fetch the files into public/fonts;
+   until they are present these rules simply do not match and the stack below
+   falls through to the system UI font, which is a close match for Inter. */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/fonts/inter-variable.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Roboto';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/fonts/roboto-variable.woff2') format('woff2');
+}
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -35,5 +54,75 @@
   }
   h1, h2, h3, h4, h5, h6 {
     @apply font-inter;
+  }
+}
+
+/* Printing a stock-intake summary.
+   The app shell is a fixed-height, overflow-hidden, position:relative column --
+   great on screen, but it would clip the sheet to one page and offset it by the
+   sidebar. So the chrome is removed outright (.no-print) and the shell is
+   unpinned, rather than hiding things with visibility and leaving blank pages
+   where they used to be. Dark mode is overridden too: a shopkeeper filing this
+   with their GST paperwork wants ink on white. */
+@media print {
+  html,
+  body {
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .app-shell,
+  .app-column,
+  .app-main {
+    display: block !important;
+    position: static !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    max-width: none !important;
+    background: #fff !important;
+  }
+
+  .print-sheet {
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  .print-sheet * {
+    background: transparent !important;
+    color: #000 !important;
+    border-color: #999 !important;
+    /* The lines table scrolls sideways on a phone; on paper it must not clip. */
+    overflow: visible !important;
+  }
+
+  /* Keep a line's details together across a page break. */
+  .print-sheet tr,
+  .print-sheet table {
+    break-inside: auto;
+  }
+  .print-sheet tr {
+    break-inside: avoid;
+  }
+  .print-sheet thead {
+    display: table-header-group;
+  }
+
+  @page {
+    margin: 12mm;
   }
 }

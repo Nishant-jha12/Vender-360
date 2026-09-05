@@ -6,16 +6,21 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../components/Toast';
 
 export default function Auth() {
-  const [mode, setMode] = useState('login'); // login | signup | otp | forgot
+  const [mode, setMode] = useState('login'); // login | signup | otp | forgot | reset
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
-  const [pendingVendorId, setPendingVendorId] = useState(null);
+  // Signed proof that the password step just succeeded, and the only thing the
+  // OTP step will accept. Held in memory alone -- it is short-lived and has no
+  // business outliving the tab.
+  const [challengeToken, setChallengeToken] = useState(null);
   const [debugOtp, setDebugOtp] = useState(null);
 
   const [form, setForm] = useState({
     name: '', username: '', email: '', phone: '', password: '', confirmPassword: '', otp: '',
   });
+  // A reset link arrives as ?token=... -- landing on it opens the reset form.
+  const [resetToken, setResetToken] = useState(null);
 
   const navigate = useNavigate();
   const toast = useToast();
@@ -24,7 +29,51 @@ export default function Auth() {
   useEffect(() => {
     // Staying signed in is the sane default on a shop's own phone.
     setRememberMe(window.innerWidth < 768);
+
+    const token = new URLSearchParams(window.location.search).get('token');
+    if (token) {
+      setResetToken(token);
+      setMode('reset');
+      // Keep the token out of the address bar, history and any Referer header.
+      window.history.replaceState({}, '', window.location.pathname);
+    }
   }, []);
+
+  const requestReset = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      const res = await api.post('/auth/forgot-password', { identifier: form.username });
+      // Deliberately the same answer whether or not the account exists.
+      toast.success(res.data.message);
+      setMode('login');
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const submitReset = async (e) => {
+    e.preventDefault();
+    if (form.password !== form.confirmPassword) {
+      toast.error('The two passwords do not match');
+      return;
+    }
+    setLoading(true);
+    try {
+      await api.post('/auth/reset-password', {
+        reset_token: resetToken, new_password: form.password,
+      });
+      toast.success('Password changed. Sign in with the new one.');
+      setResetToken(null);
+      setMode('login');
+    } catch (err) {
+      toast.error(errorMessage(err, 'That reset link is no longer valid'));
+    } finally {
+      setLoading(false);
+    }
+  };
 
   if (isAuthenticated) return <Navigate to="/app" replace />;
 
@@ -36,8 +85,8 @@ export default function Auth() {
       toast.error('The two passwords do not match');
       return;
     }
-    if (form.password.length < 8) {
-      toast.error('Use at least 8 characters for your password');
+    if (form.password.length < 10) {
+      toast.error('Use at least 10 characters for your password');
       return;
     }
     setLoading(true);
@@ -46,7 +95,7 @@ export default function Auth() {
         name: form.name, username: form.username, email: form.email,
         phone: form.phone, password: form.password,
       });
-      setPendingVendorId(res.data.vendor_id);
+      setChallengeToken(res.data.challenge_token);
       setDebugOtp(res.data.debug_otp || null);
       setMode('otp');
     } catch (err) {
@@ -64,7 +113,7 @@ export default function Auth() {
         identifier: form.username,
         password: form.password,
       });
-      setPendingVendorId(res.data.vendor_id);
+      setChallengeToken(res.data.challenge_token);
       setDebugOtp(res.data.debug_otp || null);
       setMode('otp');
     } catch (err) {
@@ -79,7 +128,7 @@ export default function Auth() {
     setLoading(true);
     try {
       const res = await api.post('/auth/verify-otp', {
-        vendor_id: pendingVendorId,
+        challenge_token: challengeToken,
         otp: form.otp,
       });
       login(res.data, rememberMe);
@@ -93,7 +142,9 @@ export default function Auth() {
 
   const resend = async () => {
     try {
-      const res = await api.post('/auth/resend-otp', { vendor_id: pendingVendorId, otp: '000000' });
+      const res = await api.post('/auth/resend-otp', { challenge_token: challengeToken });
+      // A resend mints a fresh challenge; the old one is replaced.
+      setChallengeToken(res.data.challenge_token);
       setDebugOtp(res.data.debug_otp || null);
       toast.success('A new code has been sent');
     } catch (err) {
@@ -106,6 +157,7 @@ export default function Auth() {
     signup: ['Create your account', 'Set up your store on Vendor360'],
     otp: ['Verify it is you', 'Enter the 6-digit code'],
     forgot: ['Reset your password', 'We will send you a reset link'],
+    reset: ['Choose a new password', 'At least 10 characters'],
   };
   const [title, subtitle] = headings[mode];
 
@@ -118,7 +170,7 @@ export default function Auth() {
 
         <div className="bg-brand-surface border border-brand-border rounded-3xl shadow-xl overflow-hidden">
           <div className="bg-brand-primary text-brand-on-primary p-6 text-center relative">
-            {(mode === 'otp' || mode === 'forgot') && (
+            {(mode === 'otp' || mode === 'forgot' || mode === 'reset') && (
               <button
                 onClick={() => setMode('login')}
                 aria-label="Go back"
@@ -239,19 +291,77 @@ export default function Auth() {
             )}
 
             {mode === 'forgot' && (
-              <div className="space-y-4">
-                <div className="bg-brand-amber/10 border border-brand-amber/30 rounded-2xl p-4">
-                  <p className="text-sm font-bold text-brand-ink">Not available yet</p>
-                  <p className="text-xs text-brand-muted mt-1.5 leading-relaxed">
-                    Password reset needs an email or SMS provider, which is not
-                    connected. Rather than show a form that quietly does nothing,
-                    it is disabled until that is wired up.
-                  </p>
-                </div>
-                <button onClick={() => setMode('login')} className="w-full bg-brand-bg border border-brand-border text-brand-ink font-bold py-3 rounded-2xl">
+              <form onSubmit={requestReset} className="space-y-4">
+                <label className="block">
+                  <span className="text-[11px] font-bold text-brand-muted uppercase tracking-wider">
+                    Username or email
+                  </span>
+                  <input
+                    required
+                    name="username"
+                    value={form.username}
+                    onChange={set}
+                    autoComplete="username"
+                    className="w-full mt-1 bg-brand-bg border border-brand-border rounded-2xl px-4 py-3 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                    placeholder="Enter username or email"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  disabled={loading || !form.username.trim()}
+                  className="w-full bg-brand-primary text-brand-on-primary font-bold py-3 rounded-2xl flex items-center justify-center gap-2 disabled:opacity-60"
+                >
+                  {loading && <Loader2 size={16} className="animate-spin" />} Send the reset link
+                </button>
+                <button type="button" onClick={() => setMode('login')} className="w-full bg-brand-bg border border-brand-border text-brand-ink font-bold py-3 rounded-2xl">
                   Back to sign in
                 </button>
-              </div>
+              </form>
+            )}
+
+            {mode === 'reset' && (
+              <form onSubmit={submitReset} className="space-y-4">
+                <label className="block">
+                  <span className="text-[11px] font-bold text-brand-muted uppercase tracking-wider">
+                    New password
+                  </span>
+                  <input
+                    required
+                    type="password"
+                    name="password"
+                    value={form.password}
+                    onChange={set}
+                    autoComplete="new-password"
+                    minLength={10}
+                    className="w-full mt-1 bg-brand-bg border border-brand-border rounded-2xl px-4 py-3 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                    placeholder="At least 10 characters"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-[11px] font-bold text-brand-muted uppercase tracking-wider">
+                    Confirm new password
+                  </span>
+                  <input
+                    required
+                    type="password"
+                    name="confirmPassword"
+                    value={form.confirmPassword}
+                    onChange={set}
+                    autoComplete="new-password"
+                    className="w-full mt-1 bg-brand-bg border border-brand-border rounded-2xl px-4 py-3 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-primary"
+                  />
+                </label>
+                <p className="text-[11px] text-brand-muted">
+                  Changing your password signs you out everywhere else.
+                </p>
+                <button
+                  type="submit"
+                  disabled={loading || form.password.length < 10}
+                  className="w-full bg-brand-primary text-brand-on-primary font-bold py-3 rounded-2xl flex items-center justify-center gap-2 disabled:opacity-60"
+                >
+                  {loading && <Loader2 size={16} className="animate-spin" />} Set the new password
+                </button>
+              </form>
             )}
           </div>
         </div>

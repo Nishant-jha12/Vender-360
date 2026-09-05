@@ -31,6 +31,7 @@ def _profile(vendor: models.Vendor, db: Session) -> schemas.VendorResponse:
         store_name=vendor.store_name,
         phone=vendor.phone,
         upi_id=vendor.upi_id,
+        gstin=vendor.gstin,
         total_items=total_items,
     )
 
@@ -62,6 +63,7 @@ def update_profile(
     vendor.store_name = req.store_name.strip()
     vendor.phone = (req.phone or "").strip() or None
     vendor.upi_id = req.upi_id
+    vendor.gstin = req.gstin
     db.commit()
     db.refresh(vendor)
     return _profile(vendor, db)
