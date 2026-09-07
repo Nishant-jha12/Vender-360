@@ -75,6 +75,25 @@ class Settings:
     # a short-dated carton can be refused rather than written off later.
     SHORT_DATED_DAYS: int = int(os.environ.get("SHORT_DATED_DAYS", "30"))
 
+    # --- Barcode lookup -----------------------------------------------------
+    # Scanning an unknown barcode can fetch the product name, brand and size
+    # from an open database so the shopkeeper does not type them. It is OFF by
+    # default: it sends the barcode (and nothing else -- no shop identity) to a
+    # third party, which is the operator's decision to make, not a default.
+    BARCODE_LOOKUP_ENABLED: bool = _get_bool("BARCODE_LOOKUP_ENABLED", False)
+    BARCODE_LOOKUP_SOURCE: str = os.environ.get("BARCODE_LOOKUP_SOURCE", "Open Food Facts")
+    BARCODE_LOOKUP_URL: str = os.environ.get(
+        "BARCODE_LOOKUP_URL",
+        # Only the fields we use, so the response stays small on a shop's
+        # connection. categories_tags carries the English taxonomy ("en:crisps")
+        # and is the only category worth trusting: the plain text fields come back
+        # in whichever language the contributor typed.
+        "https://world.openfoodfacts.org/api/v2/product/{barcode}.json"
+        "?fields=product_name,product_name_en,generic_name,generic_name_en,brands,"
+        "quantity,categories_tags,image_front_small_url,image_small_url,image_url",
+    )
+    BARCODE_LOOKUP_TIMEOUT: int = int(os.environ.get("BARCODE_LOOKUP_TIMEOUT", "4"))
+
     # --- Password reset -----------------------------------------------------
     RESET_TOKEN_EXPIRE_MINUTES: int = int(os.environ.get("RESET_TOKEN_EXPIRE_MINUTES", "30"))
     # Where the reset link points. The token is appended as ?token=...
@@ -106,6 +125,18 @@ class Settings:
     OTP_RATE_LIMIT: int = int(os.environ.get("OTP_RATE_LIMIT", "15"))
     OTP_RATE_WINDOW_SECONDS: int = int(os.environ.get("OTP_RATE_WINDOW_SECONDS", "300"))
 
+    # --- Account lockout ----------------------------------------------------
+    # Rate limiting lives in memory and is emptied by every restart, so a deploy
+    # or a crash loop refills an attacker's budget of guesses. This is the part
+    # that survives: consecutive wrong passwords are counted on the account row.
+    LOGIN_MAX_FAILURES: int = int(os.environ.get("LOGIN_MAX_FAILURES", "10"))
+    LOGIN_LOCKOUT_MINUTES: int = int(os.environ.get("LOGIN_LOCKOUT_MINUTES", "15"))
+
+    # --- Security log -------------------------------------------------------
+    # Addresses and devices are personal data. Keep them long enough to
+    # investigate an incident, not long enough to become a movement record.
+    SECURITY_LOG_RETENTION_DAYS: int = int(os.environ.get("SECURITY_LOG_RETENTION_DAYS", "180"))
+
     # Largest JSON body accepted, in bytes. Guards the list-taking endpoints
     # from a body big enough to exhaust memory.
     MAX_REQUEST_BYTES: int = int(os.environ.get("MAX_REQUEST_BYTES", str(1024 * 1024)))
@@ -113,11 +144,19 @@ class Settings:
     # --- CORS ---------------------------------------------------------------
     # Explicit origins: "*" together with allow_credentials=True is rejected by
     # browsers, so it can never be the default here.
+    # Both hostnames and Vite's fallback ports: localhost and 127.0.0.1 are
+    # different origins to a browser, and Vite silently moves to 5174 when 5173
+    # is taken -- which blocks every API call and looks exactly like the backend
+    # being down.
     CORS_ORIGINS: list = [
         o.strip()
         for o in os.environ.get(
             "CORS_ORIGINS",
-            "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173",
+            ",".join(
+                f"http://{host}:{port}"
+                for host in ("localhost", "127.0.0.1")
+                for port in (5173, 5174, 5175, 4173)
+            ),
         ).split(",")
         if o.strip()
     ]

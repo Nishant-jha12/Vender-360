@@ -3,6 +3,7 @@ import {
   BookUser, Check, IndianRupee, Loader2, Minus, Package, Plus, QrCode,
   Search, ShoppingCart, Trash2, X,
 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { api, errorMessage } from '../lib/api';
 import { money, qty as fmtQty } from '../lib/format';
 import { useToast } from '../components/Toast';
@@ -22,6 +23,7 @@ import CheckoutModal from '../components/CheckoutModal';
  * in the path of a cash sale.
  */
 export default function Billing() {
+  const { t } = useTranslation();
   const toast = useToast();
   const { vendor } = useAuth();
 
@@ -180,9 +182,9 @@ export default function Billing() {
         {/* ---------------- Product picker ---------------- */}
         <div className="md:col-span-3 space-y-4">
           <div>
-            <h2 className="text-xl font-bold text-brand-ink font-inter">New Bill</h2>
+            <h2 className="text-xl font-bold text-brand-ink font-inter">{t('billing.title')}</h2>
             <p className="text-xs text-brand-muted mt-0.5">
-              Tap an item to add it. Tap again to increase the quantity.
+              {t('billing.subtitle')}
             </p>
           </div>
 
@@ -193,8 +195,8 @@ export default function Billing() {
               type="search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search your products..."
-              aria-label="Search products"
+              placeholder={t('billing.search_placeholder')}
+              aria-label={t('common.search')}
               className="w-full bg-brand-surface border border-brand-border rounded-2xl pl-11 pr-10 py-3 text-sm text-brand-ink shadow-sm focus:outline-none focus-visible:ring-2 focus:ring-2 focus:ring-brand-primary transition-colors"
             />
             {searching && (
@@ -218,7 +220,9 @@ export default function Billing() {
             <>
               {!showingSearch && (
                 <p className="text-[11px] font-bold uppercase tracking-wider text-brand-muted">
-                  {frequent.some((i) => (i.sale_count || 0) > 0) ? 'Sells most often' : 'Your products'}
+                  {frequent.some((i) => (i.sale_count || 0) > 0)
+                    ? t('billing.sells_most_often')
+                    : t('billing.your_products')}
                 </p>
               )}
               <div className="grid grid-cols-2 lg:grid-cols-3 gap-2.5">
@@ -308,7 +312,7 @@ export default function Billing() {
       {cart.length > 0 && (
         <div className="md:hidden fixed bottom-0 inset-x-0 z-40">
           {cartOpenOnMobile && (
-            <div className="bg-brand-surface border-t border-brand-border max-h-[55vh] overflow-y-auto p-4 shadow-[0_-8px_24px_rgba(0,0,0,0.12)]">
+            <div className="bg-brand-surface border-t border-brand-border max-h-[55vh] max-h-[55dvh] overflow-y-auto p-4 shadow-[0_-8px_24px_rgba(0,0,0,0.12)]">
               <CartLines
                 cart={cart}
                 onChangeQty={changeQty}
@@ -316,15 +320,15 @@ export default function Billing() {
                 onRemove={removeLine}
               />
               <div className="grid grid-cols-3 gap-2 mt-4">
-                <PayButton label="Cash" icon={IndianRupee} onClick={() => submitSale('cash')} disabled={submitting} primary />
-                <PayButton label="UPI" icon={QrCode} onClick={() => setShowUpi(true)} disabled={submitting} />
-                <PayButton label="Khata" icon={BookUser} onClick={() => setShowKhataPicker(true)} disabled={submitting} />
+                <PayButton label={t('billing.cash')} icon={IndianRupee} onClick={() => submitSale('cash')} disabled={submitting} primary />
+                <PayButton label={t('billing.upi')} icon={QrCode} onClick={() => setShowUpi(true)} disabled={submitting} />
+                <PayButton label={t('billing.khata')} icon={BookUser} onClick={() => setShowKhataPicker(true)} disabled={submitting} />
               </div>
             </div>
           )}
           <button
             onClick={() => setCartOpenOnMobile((open) => !open)}
-            className="w-full bg-brand-primary text-brand-on-primary px-4 py-4 flex items-center justify-between shadow-lg"
+            className="w-full bg-brand-primary text-brand-on-primary px-4 py-4 app-safe-bottom flex items-center justify-between shadow-lg"
             aria-expanded={cartOpenOnMobile}
           >
             <span className="flex items-center gap-2 font-bold text-sm">
@@ -338,10 +342,10 @@ export default function Billing() {
 
       {/* ---------------- Khata customer picker ---------------- */}
       {showKhataPicker && (
-        <Modal title="Put this on whose khata?" onClose={() => setShowKhataPicker(false)}>
+        <Modal title={t('billing.whose_khata')} onClose={() => setShowKhataPicker(false)}>
           {customers.length === 0 ? (
             <p className="text-sm text-brand-muted py-4 text-center">
-              No khata customers yet. Add one from the Khata page first.
+              {t('billing.no_khata_customers')}
             </p>
           ) : (
             <div className="space-y-2 max-h-72 overflow-y-auto">
@@ -383,11 +387,15 @@ function CartPanel({
   cart, total, submitting, onChangeQty, onSetPrice, onRemove, onClear,
   onCash, onUpi, onKhata, upiReady,
 }) {
+  // Its own hook: `t` from the page component is not in scope down here, and a
+  // build passes either way -- it would only fail when this panel rendered.
+  const { t } = useTranslation();
+
   return (
     <div className="bg-brand-surface border border-brand-border rounded-2xl shadow-sm overflow-hidden">
       <div className="px-4 py-3 border-b border-brand-border flex justify-between items-center bg-brand-bg/50">
         <h3 className="text-sm font-bold text-brand-ink flex items-center gap-2">
-          <ShoppingCart size={16} /> Current bill
+          <ShoppingCart size={16} /> {t('billing.current_bill')}
         </h3>
         {cart.length > 0 && (
           <button
@@ -402,13 +410,13 @@ function CartPanel({
       <div className="p-4">
         {cart.length === 0 ? (
           <p className="text-sm text-brand-muted text-center py-8">
-            Tap a product to start a bill.
+            {t('billing.empty_hint')}
           </p>
         ) : (
           <>
             <CartLines cart={cart} onChangeQty={onChangeQty} onSetPrice={onSetPrice} onRemove={onRemove} />
             <div className="flex justify-between items-baseline mt-4 pt-4 border-t border-brand-border">
-              <span className="text-sm font-bold text-brand-ink">Total</span>
+              <span className="text-sm font-bold text-brand-ink">{t('billing.total')}</span>
               <span className="text-2xl font-extrabold text-brand-ink font-inter">{money(total)}</span>
             </div>
             <div className="grid grid-cols-3 gap-2 mt-4">

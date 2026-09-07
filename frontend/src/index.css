@@ -126,3 +126,170 @@
     margin: 12mm;
   }
 }
+
+/* The crash screen.
+   Written without design tokens or Tailwind classes on purpose: it renders when
+   something has already gone wrong, so it must not depend on the rest of the
+   stylesheet having applied. Both themes are handled here rather than by the
+   .dark class, in case React never got far enough to set it. */
+.crash-screen {
+  min-height: 100vh;
+  /* dvh keeps this correct on iOS Safari, whose toolbar makes 100vh overflow. */
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  padding-bottom: calc(24px + env(safe-area-inset-bottom));
+  background: #f8f9fa;
+  color: #202124;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.crash-card {
+  max-width: 32rem;
+  width: 100%;
+  background: #fff;
+  border: 1px solid #dadce0;
+  border-radius: 16px;
+  padding: 24px;
+}
+
+.crash-card h1 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin: 0 0 8px;
+}
+
+.crash-card p {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: #5f6368;
+  margin: 0 0 20px;
+}
+
+.crash-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.crash-actions button {
+  flex: 1 1 10rem;
+  /* 44px is the minimum comfortable touch target on iOS. */
+  min-height: 44px;
+  padding: 12px 18px;
+  border-radius: 14px;
+  border: 1px solid #dadce0;
+  background: #f1f3f4;
+  color: #202124;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.crash-actions .crash-primary {
+  background: #1a73e8;
+  border-color: #1a73e8;
+  color: #fff;
+}
+
+.crash-card details {
+  margin-top: 18px;
+  font-size: 0.8rem;
+  color: #5f6368;
+}
+
+.crash-card summary {
+  cursor: pointer;
+  min-height: 32px;
+}
+
+.crash-card pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #f1f3f4;
+  border-radius: 10px;
+  padding: 10px;
+  margin-top: 8px;
+  font-size: 0.75rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .crash-screen { background: #202124; color: #e8eaed; }
+  .crash-card { background: #292a2d; border-color: #3c4043; }
+  .crash-card h1 { color: #e8eaed; }
+  .crash-card p, .crash-card details { color: #9aa0a6; }
+  .crash-actions button { background: #3c4043; border-color: #5f6368; color: #e8eaed; }
+  .crash-actions .crash-primary { background: #8ab4f8; border-color: #8ab4f8; color: #202124; }
+  .crash-card pre { background: #202124; }
+}
+
+/* ------------------------------------------------------------------------
+   Cross-platform corrections: Windows, macOS, Android, iOS and iPadOS.
+   These override Tailwind utilities deliberately, and sit after them so they
+   win, rather than being sprinkled through every component.
+   ------------------------------------------------------------------------ */
+
+/* iOS Safari zooms the whole page when a focused input is smaller than 16px,
+   and does not zoom back out. Every form in this app used 14px, so tapping a
+   quantity box on an iPhone left the shopkeeper zoomed into a corner of the
+   billing screen. Only touch devices need this; desktop keeps its density. */
+@media (hover: none) and (pointer: coarse) {
+  /* !important because these compete with Tailwind's text-sm/text-xs on the
+     same elements, and a class beats a bare element selector. This is a
+     platform correction that must not lose to a utility class. */
+  input:not([type='checkbox']):not([type='radio']),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* 100vh on iOS Safari counts the address bar that is not there, so a full
+   height container overflows and the bottom of the app is unreachable. dvh is
+   the fix; the plain vh line stays first as the fallback for older browsers. */
+.h-screen {
+  height: 100vh;
+  height: 100dvh;
+}
+
+.min-h-screen {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* index.html sets viewport-fit=cover so the app fills the screen on a notched
+   iPhone -- which then requires keeping content out from under the notch, the
+   home indicator and the rounded corners. */
+.app-safe-bottom {
+  padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));
+}
+
+.app-safe-x {
+  padding-left: max(1rem, env(safe-area-inset-left));
+  padding-right: max(1rem, env(safe-area-inset-right));
+}
+
+/* The scrolling area has to clear the fixed bottom bar plus the home
+   indicator, or the last row of a list is permanently hidden behind it. */
+@media (max-width: 767px) {
+  .app-main {
+    padding-bottom: calc(7rem + env(safe-area-inset-bottom));
+  }
+}
+
+/* Momentum scrolling inside panes on iOS, and no rubber-banding of the shell
+   behind them. */
+.app-main {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* Stops iOS double-tap zoom on controls without disabling pinch zoom, which
+   is a genuine accessibility need and must stay available. */
+button,
+[role="button"],
+a {
+  touch-action: manipulation;
+}

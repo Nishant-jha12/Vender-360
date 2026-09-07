@@ -19,6 +19,7 @@ from typing import List, NamedTuple, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 
+import barcodes
 import models
 import schemas
 import security
@@ -484,12 +485,36 @@ def scan(
 
     if item is None:
         db.commit()  # keep the session that was just opened
+        details = barcodes.describe(req.barcode or "")
+        # Fill in what the number and the open product database know, so an
+        # unknown barcode opens a form that is mostly already answered rather
+        # than an empty one.
+        product = (
+            barcodes.lookup(details["barcode"], db)
+            if details["barcode"] and details["check_digit_valid"] is not False
+            else None
+        )
+
+        if details["check_digit_valid"] is False:
+            message = (
+                "That barcode's check digit does not add up, so it was probably "
+                "misread or mistyped. Scan it again, or add the product by hand."
+            )
+        elif product:
+            message = f"{product['sku_name']} -- found from the barcode. Check it and add it."
+        else:
+            message = (
+                "That barcode isn't in your catalogue yet. Add it once and "
+                "every future scan will know it."
+            )
+
         return {
             "status": "unknown",
-            "barcode": req.barcode,
+            "barcode": details["barcode"] or req.barcode,
             "intake_id": session.id,
-            "message": "That barcode isn't in your catalogue yet. Add it once and "
-            "every future scan will know it.",
+            "details": details,
+            "product": product,
+            "message": message,
         }
 
     units_per_pack = _units_per_pack(item)

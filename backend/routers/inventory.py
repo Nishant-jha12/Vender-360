@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+import barcodes
 import models
 import schemas
 import security
@@ -127,6 +128,51 @@ def expiring_soon(
         results.append(payload)
 
     return results
+
+
+@router.get("/lookup/{barcode}")
+def lookup_barcode(
+    barcode: str,
+    vendor: models.Vendor = Depends(security.get_current_vendor),
+    db: Session = Depends(get_db),
+):
+    """Everything known about a barcode before the product exists.
+
+    Answers in three parts, cheapest first: what the number itself says (check
+    digit, country -- no network), whether this shop already stocks it, and what
+    an open product database knows. The last is optional and cached.
+    """
+    details = barcodes.describe(barcode)
+    digits = details["barcode"]
+
+    existing = (
+        db.query(models.InventoryItem)
+        .filter(
+            models.InventoryItem.vendor_id == vendor.id,
+            models.InventoryItem.barcode == digits,
+            models.InventoryItem.is_archived.is_(False),
+        )
+        .first()
+        if digits
+        else None
+    )
+
+    return {
+        **details,
+        "known_locally": existing is not None,
+        "item": (
+            schemas.InventoryItemResponse.model_validate(existing).model_dump()
+            if existing
+            else None
+        ),
+        # Skipped for a barcode that fails its own check digit: looking up a
+        # mistyped number can only return someone else's product.
+        "product": (
+            barcodes.lookup(digits, db)
+            if digits and details["check_digit_valid"] is not False and existing is None
+            else None
+        ),
+    }
 
 
 @router.get("/{item_id}/batches", response_model=List[schemas.StockBatchResponse])

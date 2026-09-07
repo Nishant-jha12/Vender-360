@@ -1,0 +1,38 @@
+version: 2
+
+# Weekly, grouped, and only where an upgrade is worth a human's attention.
+#
+# Ungrouped Dependabot on a project this size opens a dozen pull requests a
+# week, they go unread, and the one that actually mattered is buried with the
+# rest. Grouping the routine patch bumps into a single PR keeps the security
+# ones visible.
+updates:
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      backend-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      frontend-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: docker
+    directory: /backend
+    schedule:
+      interval: monthly

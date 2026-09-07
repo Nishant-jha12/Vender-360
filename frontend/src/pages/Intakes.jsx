@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, Building2, Calendar, Download, FileText, Package } from 'lucide-react';
 import Papa from 'papaparse';
+import { useTranslation } from 'react-i18next';
 import { api, errorMessage } from '../lib/api';
 import { money, qty as fmtQty, shortDate } from '../lib/format';
 import { useToast } from '../components/Toast';
@@ -17,6 +18,7 @@ import IntakeSummary from '../components/IntakeSummary';
 const thisMonth = () => new Date().toISOString().slice(0, 7);
 
 export default function Intakes() {
+  const { t } = useTranslation();
   const toast = useToast();
   const [tab, setTab] = useState('deliveries'); // deliveries | register
   const [rows, setRows] = useState([]);
@@ -96,7 +98,7 @@ export default function Intakes() {
           onClick={() => setOpenSummary(null)}
           className="no-print text-sm font-semibold text-brand-muted hover:text-brand-primary flex items-center gap-1.5"
         >
-          <ArrowLeft size={15} /> All deliveries
+          <ArrowLeft size={15} /> {t('deliveries.all_deliveries')}
         </button>
         <IntakeSummary summary={openSummary} />
       </div>
@@ -106,16 +108,16 @@ export default function Intakes() {
   return (
     <div className="space-y-4 pb-6 max-w-4xl mx-auto">
       <div>
-        <h2 className="text-xl font-bold text-brand-ink font-inter">Deliveries</h2>
+        <h2 className="text-xl font-bold text-brand-ink font-inter">{t('deliveries.title')}</h2>
         <p className="text-xs text-brand-muted mt-0.5">
-          Every stock intake, and the month totalled for your return.
+          {t('deliveries.subtitle')}
         </p>
       </div>
 
       <div className="flex gap-2">
         {[
-          ['deliveries', 'Deliveries'],
-          ['register', 'Purchase register'],
+          ['deliveries', t('deliveries.tab_deliveries')],
+          ['register', t('deliveries.tab_register')],
         ].map(([key, label]) => (
           <button
             key={key}
@@ -140,8 +142,8 @@ export default function Intakes() {
         ) : rows.length === 0 ? (
           <EmptyState
             icon={Package}
-            title="No deliveries yet"
-            description="Scan a delivery in from the Scan screen and it will be kept here."
+            title={t('deliveries.none_yet')}
+            description={t('deliveries.none_yet_hint')}
           />
         ) : (
           <ul className="space-y-2">
@@ -154,7 +156,7 @@ export default function Intakes() {
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="font-bold text-brand-ink text-sm truncate">
-                        {row.supplier_name || 'Unnamed supplier'}
+                        {row.supplier_name || t('deliveries.unnamed_supplier')}
                       </p>
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-[11px] text-brand-muted">
                         <span className="flex items-center gap-1">
@@ -180,7 +182,7 @@ export default function Intakes() {
                             : 'bg-brand-success/15 text-brand-success'
                         }`}
                       >
-                        {row.status === 'open' ? 'In progress' : 'Closed'}
+                        {row.status === 'open' ? t('deliveries.in_progress') : t('deliveries.closed')}
                       </span>
                     </div>
                   </div>
@@ -195,7 +197,7 @@ export default function Intakes() {
         <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
             <label className="text-xs font-bold text-brand-muted uppercase tracking-wider">
-              Month
+              {t('deliveries.month')}
               <input
                 type="month"
                 value={month}
@@ -217,8 +219,8 @@ export default function Intakes() {
           ) : register.entries.length === 0 ? (
             <EmptyState
               icon={Building2}
-              title="Nothing closed that month"
-              description="Only closed deliveries appear on the register."
+              title={t('deliveries.nothing_closed')}
+              description={t('deliveries.nothing_closed_hint')}
             />
           ) : (
             <div className="bg-brand-surface border border-brand-border rounded-2xl p-4 shadow-sm space-y-4">

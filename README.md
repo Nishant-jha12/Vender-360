@@ -62,7 +62,7 @@ frontend/src
   context/            AuthContext — the single source of session state
   hooks/useApi.js     fetch + loading/error/retry
   hooks/useChartTheme small helper so charts follow light/dark
-  hooks/useBarcodeScanner  camera scanning on the browser's own BarcodeDetector
+  hooks/useBarcodeScanner  camera scanning; lib/barcodeDetector picks the engine
   components/         Toast, States (skeleton/empty/error/demo), ExpiryAlert,
                       CheckoutModal, ModalShell, IntakeItemSheet, IntakeSummary
   lib/intakePdf.js    the goods-received note, as a PDF
@@ -96,8 +96,23 @@ depends on how the product arrives from the wholesaler:
   and dates back onto the product, so the next delivery scans with nothing to
   type.
 
-An unrecognised barcode says so and offers to create the product, rather than
-guessing at a match.
+An unrecognised barcode does not just say so — it fills the form in. Three
+layers, cheapest first:
+
+1. **The number itself**, with no network at all. The GS1 check digit catches a
+   misread before it becomes a product nobody can scan again, and the prefix
+   gives the country of registration (890 is India).
+2. **This shop's own catalogue**, in case the product exists under another name.
+3. **An open product database**, for the name, brand, size and category.
+
+The third is **off by default** (`BARCODE_LOOKUP_ENABLED`): it sends the barcode
+— and only the barcode, never the shop identity — to a third party, which is the
+operator's decision rather than a default. Results are cached permanently, so a
+repeat scan of the same code works with no signal, and a failed or slow lookup
+just leaves the field blank rather than costing the scan.
+
+Prices are never guessed. Cost and selling price are always the shopkeeper's to
+set, and every filled field stays editable.
 
 Everything scanned in one delivery is a `StockIntake` session. Stock moves as
 each line is added, not at the end, so a phone that dies mid-delivery has not
@@ -147,6 +162,9 @@ requirements. Swapping in argon2 later is a contained change in `crypto_utils.py
 | Per-account `token_epoch` — a password change or `/api/auth/logout-all` kills every existing token | `security.py` |
 | OTP dies after 5 wrong guesses | `OTP_MAX_ATTEMPTS` |
 | Rate limits on login, signup and the OTP step, by IP *and* by account | `ratelimit.py` |
+| Account lockout that survives a restart, unlike the in-memory limiter | `LOGIN_MAX_FAILURES`, `LOGIN_LOCKOUT_MINUTES` |
+| Every sign-in, failure and lockout recorded with address and device, readable by the shopkeeper | `audit.py`, `/api/auth/security-log` |
+| Dependencies audited against the vulnerability databases on every push and weekly | `.github/workflows/ci.yml` |
 | Constant-time login, so timing does not reveal which accounts exist | `routers/auth.py` |
 | CSP, HSTS, `X-Frame-Options`, `nosniff`, `no-referrer`, `Cache-Control: no-store` | `main.py` |
 | Request body ceiling and bounded list inputs | `MAX_REQUEST_BYTES`, `max_length` |
@@ -170,7 +188,10 @@ Known limits, stated plainly:
   and the 12-hour lifetime plus `logout-all` limit the damage — but httpOnly
   cookies with CSRF tokens would be strictly better, and are the next step.
 - **Rate limiting is in-process.** It stops scripted brute force against one
-  server; more than one instance needs a shared store such as Redis.
+  server; more than one instance needs a shared store such as Redis. The part
+  that mattered most is no longer only in memory: consecutive failed passwords
+  are counted on the account row, so a restart no longer hands an attacker a
+  fresh budget of guesses.
 - **You must connect a delivery provider.** Codes and reset links go through
   `notifications.py`: set `NOTIFY_PROVIDER=http` with `NOTIFY_HTTP_URL` pointing at
   MSG91, Twilio, Gupshup or your own gateway. Production refuses to start without
@@ -241,13 +262,18 @@ forecast (once there are 14 days of history).
 **Not real yet** — the heatmap's demand zones, wholesalers, competitors and
 catchment figures are illustrative sample data (the map itself is real);
 receipt OCR is not connected, so a wholesale bill is still counted in by
-scanning or typing rather than read from a photo; and password reset needs an
-email provider, so it is disabled rather than pretending to send.
+scanning or typing rather than read from a photo; and one-time codes and reset
+links need a delivery provider wired up (`NOTIFY_PROVIDER=http`) — until then
+they are generated and go nowhere, which is why production refuses to start
+without one.
 
-Barcode scanning uses the browser's built-in `BarcodeDetector`, which Chrome on
-Android has and Safari and Firefox do not. Where it is missing the camera still
-opens for aiming and the screen says to type the number instead — a USB scanner
-types it for you.
+Barcode scanning uses the browser's built-in `BarcodeDetector` where it exists
+— Chrome on Android, ChromeOS and macOS — and falls back to a WebAssembly build
+of ZXing everywhere else, which covers Windows and Linux desktops and every
+iPhone and iPad. The fallback is a dynamic import, so the phone that has a
+native detector never downloads it, and the wasm is served from this app's own
+origin rather than a CDN. A USB or bluetooth scanner works anywhere: it types
+the digits and presses Enter.
 
 Voice logging is real, but it interprets first and asks you to confirm before
 writing anything.
