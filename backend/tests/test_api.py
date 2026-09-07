@@ -1684,7 +1684,7 @@ def test_old_events_are_pruned(client, vendor, db_session, monkeypatch):
     db_session.commit()
     assert "login.failed" in _events(client, headers)
 
-    monkeypatch.setattr(audit, "_last_prune", 0.0)  # the hourly guard
+    monkeypatch.setattr(audit, "_last_prune", None)  # "not pruned yet in this process"
     audit.record(db_session, audit.LOGIN_SUCCESS, vendor_id=vendor_id)
 
     assert "login.failed" not in _events(client, headers)

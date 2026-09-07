@@ -65,7 +65,12 @@ DESCRIPTIONS = {
 # Events that mean something went wrong, for the UI to colour.
 DENIED = {LOGIN_FAILED, LOGIN_LOCKED, ACCOUNT_LOCKED, OTP_FAILED, OTP_EXHAUSTED}
 
-_last_prune = 0.0
+# None means "not yet pruned in this process", so the first write always
+# prunes. It cannot be 0.0: time.monotonic() is seconds since boot, so on a
+# freshly started server 0.0 is *within* the interval and the prune was
+# skipped for the first hour of every process's life -- which on something
+# that restarts regularly means never.
+_last_prune = None
 _PRUNE_INTERVAL_SECONDS = 3600
 
 
@@ -131,7 +136,7 @@ def _prune(db: Session) -> None:
     """
     global _last_prune
     now = time.monotonic()
-    if now - _last_prune < _PRUNE_INTERVAL_SECONDS:
+    if _last_prune is not None and now - _last_prune < _PRUNE_INTERVAL_SECONDS:
         return
     _last_prune = now
 
