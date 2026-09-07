@@ -17,7 +17,7 @@ pydantic>=2.9,<3.0             # tested: 2.12.5  (2.9 is the first with cp313 wh
 # UPI QR rendering. Without these the API still starts and every other
 # endpoint works; only /api/checkout/generate-upi-qr returns 503.
 qrcode>=7.4,<9                 # tested: 8.2
-pillow>=10.4                   # tested: 11.3.0
+pillow>=12.3.0                   # tested: 11.3.0
 
 # Postgres driver. SQLite is the default and needs nothing; this is here so
 # DATABASE_URL=postgresql+psycopg://... works without a second install step.
