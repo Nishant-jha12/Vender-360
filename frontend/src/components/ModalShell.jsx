@@ -34,8 +34,11 @@ export default function ModalShell({ title, children, onClose }) {
       aria-label={title}
       onClick={onClose}
     >
+      {/* dvh rather than vh: on iOS Safari a 92vh sheet is taller than the
+          visible area, so its buttons sit under the browser toolbar. The safe
+          padding keeps them off the home indicator too. */}
       <div
-        className="bg-brand-surface rounded-t-3xl sm:rounded-3xl w-full sm:max-w-md p-5 shadow-2xl border border-brand-border max-h-[92vh] overflow-y-auto"
+        className="bg-brand-surface rounded-t-3xl sm:rounded-3xl w-full sm:max-w-md p-5 shadow-2xl border border-brand-border max-h-[92vh] max-h-[92dvh] overflow-y-auto app-safe-bottom sm:pb-5"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex justify-between items-center mb-4">

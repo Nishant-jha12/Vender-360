@@ -58,6 +58,16 @@ class Vendor(Base):
     # token stays live for its full lifetime with no way to stop it.
     token_epoch = Column(Integer, default=0, nullable=False)
 
+    # Consecutive wrong passwords, and the lock they earn.
+    #
+    # These live in the database rather than in the rate limiter's memory
+    # because that memory is cleared by every restart -- so a deploy, a crash
+    # loop or a `docker compose up` handed an attacker a fresh budget of
+    # guesses. Rate limiting still does the fast, per-request work; this is the
+    # part that has to survive the process.
+    failed_logins = Column(Integer, default=0, nullable=False)
+    locked_until = Column(DateTime, nullable=True)
+
     items = relationship("InventoryItem", back_populates="vendor", cascade="all, delete")
     transactions = relationship("Transaction", back_populates="vendor", cascade="all, delete")
     activities = relationship("ActivityLog", back_populates="vendor", cascade="all, delete")
@@ -337,6 +347,54 @@ class StockIntakeLine(Base):
     @property
     def line_total(self) -> float:
         return round(self.taxable_value + self.gst_amount, 2)
+
+
+class ProductLookupCache(Base):
+    """What an open product database said about a barcode.
+
+    A barcode identifies one product forever, so a hit never goes stale and is
+    kept indefinitely -- which also means a shop with no signal still gets the
+    details when the same code is scanned again. A miss stores a null payload so
+    an unlisted local brand is not re-fetched on every single scan.
+    """
+
+    __tablename__ = "product_lookup_cache"
+    barcode = Column(String, primary_key=True)
+    payload = Column(String, nullable=True)  # JSON, or null for "looked, found nothing"
+    source = Column(String, nullable=True)
+    fetched_at = Column(DateTime, default=datetime.utcnow)
+
+
+class SecurityEvent(Base):
+    """Who tried to get into this account, from where, and whether they got in.
+
+    Separate from ActivityLog on purpose. That records what a signed-in
+    shopkeeper *did* -- this records attempts on the account itself, including
+    the ones that failed and the ones where we do not know who was asking. The
+    two have different readers, different retention, and mixing them would bury
+    a run of failed sign-ins under a day of ordinary stock edits.
+
+    vendor_id is nullable because the most interesting row of all is a password
+    attempt against a username that does not exist.
+    """
+
+    __tablename__ = "security_events"
+    id = Column(String, primary_key=True, default=generate_uuid)
+    vendor_id = Column(String, ForeignKey("vendors.id"), index=True, nullable=True)
+
+    event = Column(String, nullable=False, index=True)   # see audit.py
+    outcome = Column(String, nullable=False, default="ok")  # ok | denied
+
+    # What was typed at the sign-in box. Kept only when there is no vendor to
+    # attribute the row to, so a real account's log never restates its own
+    # username on every line.
+    identifier = Column(String, nullable=True)
+
+    ip = Column(String, nullable=True)
+    user_agent = Column(String, nullable=True)
+    detail = Column(String, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
 
 class ActivityLog(Base):

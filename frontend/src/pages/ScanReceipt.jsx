@@ -3,6 +3,7 @@ import {
   Box, Camera, CameraOff, Check, ChevronDown, FileText, Flashlight, Loader2,
   PackageOpen, Scan, Search, Trash2,
 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { api, errorMessage } from '../lib/api';
 import { money, qty as fmtQty } from '../lib/format';
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner';
@@ -23,6 +24,7 @@ import IntakeSummary from '../components/IntakeSummary';
  * note with batch, dates and the GST split, for the input-tax claim.
  */
 export default function ScanReceipt() {
+  const { t } = useTranslation();
   const toast = useToast();
 
   const [session, setSession] = useState(null);
@@ -73,7 +75,14 @@ export default function ScanReceipt() {
           setSheet({ suggestion: data.suggestion });
         } else {
           tone('unknown');
-          setSheet({ barcode: data.barcode || code });
+          // The scan already carried back whatever the barcode itself and the
+          // open product database knew, so the form opens mostly filled in.
+          setSheet({
+            barcode: data.barcode || code,
+            found: data.product || null,
+            details: data.details || null,
+          });
+          if (data.product) toast.success(data.message);
         }
       } catch (err) {
         tone('unknown');
@@ -88,7 +97,7 @@ export default function ScanReceipt() {
   const scanner = useBarcodeScanner({ onDetect: submitCode });
   const {
     videoRef, supported, running, error: cameraError, start, stop, clearRepeatGuard,
-    torchOn, torchSupported, toggleTorch,
+    torchOn, torchSupported, toggleTorch, engine,
   } = scanner;
 
   const undoLine = async (line) => {
@@ -128,8 +137,8 @@ export default function ScanReceipt() {
       <div className="max-w-3xl mx-auto pb-24 space-y-4">
         <Header
           className="no-print"
-          title="Delivery received"
-          subtitle="Print it or save the PDF for your records."
+          title={t('scan.received_title')}
+          subtitle={t('scan.received_subtitle')}
         />
         <IntakeSummary summary={summary} onNewDelivery={startAnother} />
       </div>
@@ -143,8 +152,8 @@ export default function ScanReceipt() {
   return (
     <div className="max-w-3xl mx-auto pb-28 space-y-4">
       <Header
-        title="Stock intake"
-        subtitle="Scan the delivery in. Loose items go straight to stock; boxes ask first."
+        title={t('scan.title')}
+        subtitle={t('scan.subtitle')}
       />
 
       <div className="bg-brand-surface border border-brand-border rounded-2xl overflow-hidden shadow-sm">
@@ -160,10 +169,13 @@ export default function ScanReceipt() {
             <div className="absolute inset-0 flex flex-col items-center justify-center text-white/80 px-6 text-center gap-3">
               <Camera size={38} className="opacity-70" />
               <button
-                onClick={start}
-                className="bg-white/95 text-black text-sm font-bold px-5 py-2.5 rounded-2xl focus-visible:ring-2 focus-visible:ring-white outline-none"
+                onClick={() => {
+                  unlockAudio();
+                  start();
+                }}
+                className="bg-white/95 text-black text-sm font-bold px-5 py-3 rounded-2xl focus-visible:ring-2 focus-visible:ring-white outline-none"
               >
-                Start the camera
+                {t('scan.start_camera')}
               </button>
               {cameraError && <p className="text-xs text-white/70 max-w-xs">{cameraError}</p>}
             </div>
@@ -181,33 +193,35 @@ export default function ScanReceipt() {
                       torchOn ? 'bg-white text-black' : 'bg-black/60 text-white'
                     }`}
                   >
-                    <Flashlight size={13} /> Light
+                    <Flashlight size={13} /> {t('scan.light')}
                   </button>
                 )}
                 <button
                   onClick={stop}
                   className="bg-black/60 text-white text-xs font-semibold px-3 py-1.5 rounded-full flex items-center gap-1.5"
                 >
-                  <CameraOff size={13} /> Stop
+                  <CameraOff size={13} /> {t('scan.stop')}
                 </button>
               </div>
               <p className="absolute bottom-3 inset-x-0 text-center text-[11px] text-white/80">
-                {supported ? 'Hold a barcode in the frame' : 'Aim here, then type the number below'}
+                {engine === 'loading'
+                  ? t('scan.reader_loading')
+                  : supported
+                    ? t('scan.aim_hint')
+                    : t('scan.aim_hint_manual')}
               </p>
             </>
           )}
         </div>
 
         {running && !supported && (
-          <p className="text-[11px] text-brand-muted px-4 pt-3">
-            This browser cannot read barcodes on its own, so the preview is for aiming — type or
-            scan the number below. A USB scanner works here too.
-          </p>
+          <p className="text-[11px] text-brand-muted px-4 pt-3">{t('scan.reader_unavailable')}</p>
         )}
 
         <form
           onSubmit={(e) => {
             e.preventDefault();
+            unlockAudio();
             submitCode(manualCode);
             setManualCode('');
           }}
@@ -231,8 +245,8 @@ export default function ScanReceipt() {
               }}
               inputMode="numeric"
               autoComplete="off"
-              aria-label="Barcode number"
-              placeholder="Barcode number"
+              aria-label={t('scan.barcode_number')}
+              placeholder={t('scan.barcode_number')}
               className="w-full bg-brand-bg border border-brand-border rounded-2xl pl-9 pr-3 py-2.5 text-sm font-mono text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-primary"
             />
           </div>
@@ -241,7 +255,7 @@ export default function ScanReceipt() {
             disabled={!manualCode.trim()}
             className="px-4 rounded-2xl bg-brand-primary text-brand-on-primary text-sm font-bold disabled:opacity-50"
           >
-            Add
+            {t('common.add')}
           </button>
         </form>
       </div>
@@ -255,8 +269,8 @@ export default function ScanReceipt() {
       ) : lines.length === 0 ? (
         <EmptyState
           icon={PackageOpen}
-          title="Nothing scanned yet"
-          description="Scan the first item off the delivery and it will appear here."
+          title={t('scan.nothing_scanned')}
+          description={t('scan.nothing_scanned_hint')}
         />
       ) : (
         <div className="space-y-2">
@@ -315,7 +329,7 @@ export default function ScanReceipt() {
           className="w-full py-3.5 rounded-2xl bg-brand-primary text-brand-on-primary font-bold shadow-md flex items-center justify-center gap-2 disabled:opacity-60 focus-visible:ring-2 focus-visible:ring-brand-primary outline-none"
         >
           {closing ? <Loader2 size={17} className="animate-spin" /> : <FileText size={17} />}
-          Finish and make the summary
+          {t('scan.finish')}
         </button>
       )}
 
@@ -323,6 +337,8 @@ export default function ScanReceipt() {
         <IntakeItemSheet
           suggestion={sheet.suggestion}
           barcode={sheet.barcode}
+          found={sheet.found}
+          details={sheet.details}
           onClose={() => {
             setSheet(null);
             clearRepeatGuard();
@@ -365,6 +381,7 @@ function Header({ title, subtitle, className = '' }) {
 
 /** Plenty of kirana stock has no barcode at all -- loose dal, local brands. */
 function NoBarcodePicker({ onPick }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [term, setTerm] = useState('');
   const [results, setResults] = useState([]);
@@ -395,7 +412,7 @@ function NoBarcodePicker({ onPick }) {
         className="w-full flex items-center justify-between px-4 py-3 text-sm font-semibold text-brand-ink"
       >
         <span className="flex items-center gap-2">
-          <Search size={15} className="text-brand-muted" /> No barcode? Pick the item
+          <Search size={15} className="text-brand-muted" /> {t('scan.no_barcode')}
         </span>
         <ChevronDown size={16} className={`text-brand-muted transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -405,7 +422,7 @@ function NoBarcodePicker({ onPick }) {
           <input
             value={term}
             onChange={(e) => setTerm(e.target.value)}
-            placeholder="Search your products"
+            placeholder={t('scan.search_products')}
             aria-label="Search products"
             className="w-full bg-brand-bg border border-brand-border rounded-2xl px-3 py-2 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-primary"
           />
@@ -518,28 +535,44 @@ function SupplierDetails({ session, onSaved }) {
  * Audible feedback, because a shopkeeper scanning a crate is looking at the
  * crate and not at the screen. A miss used to be silent, so the only way to
  * notice one was to look up -- which defeats the point of scanning by feel.
+ *
+ * One shared AudioContext, unlocked by a tap. iOS refuses to start audio that
+ * was not begun inside a user gesture, and a scan arrives from the camera loop
+ * rather than a tap -- so a context created at that moment stays suspended and
+ * every iPhone would be silent. `unlockAudio` is called from the button that
+ * starts the camera, which is a gesture.
  */
-function tone(kind = 'ok') {
+let audioCtx = null;
+
+function unlockAudio() {
   try {
-    navigator.vibrate?.(kind === 'ok' ? 40 : [60, 40, 60]);
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (!Ctx) return;
-    const ctx = new Ctx();
-    const beeps = kind === 'ok' ? [[880, 0]] : [[300, 0], [240, 0.16]];
+    audioCtx ||= new Ctx();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+  } catch {
+    audioCtx = null;
+  }
+}
 
+function tone(kind = 'ok') {
+  try {
+    // Android and most desktops; iOS has no vibration API at all.
+    navigator.vibrate?.(kind === 'ok' ? 40 : [60, 40, 60]);
+    if (!audioCtx || audioCtx.state !== 'running') return;
+
+    const beeps = kind === 'ok' ? [[880, 0]] : [[300, 0], [240, 0.16]];
     beeps.forEach(([frequency, offset]) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      const at = ctx.currentTime + offset;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      const at = audioCtx.currentTime + offset;
       osc.frequency.value = frequency;
       gain.gain.setValueAtTime(0.08, at);
       gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.13);
-      osc.connect(gain).connect(ctx.destination);
+      osc.connect(gain).connect(audioCtx.destination);
       osc.start(at);
       osc.stop(at + 0.13);
     });
-
-    setTimeout(() => ctx.close(), 600);
   } catch {
     // Audio is a nicety; never let it break a scan.
   }

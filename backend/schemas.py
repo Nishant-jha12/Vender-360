@@ -137,6 +137,23 @@ class TokenResponse(BaseModel):
     store_name: str
 
 
+class SecurityEventResponse(BaseModel):
+    """One line of the account's security history, already in plain words.
+
+    The wording is built on the server so all four languages' UIs, and anything
+    reading the API directly, describe the same event the same way.
+    """
+
+    id: str
+    event: str
+    description: str
+    outcome: str
+    device: str
+    ip: Optional[str] = None
+    detail: Optional[str] = None
+    at: datetime
+
+
 # --------------------------------------------------------------------------
 # Vendor
 # --------------------------------------------------------------------------

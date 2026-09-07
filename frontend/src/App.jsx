@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
   Bell, BookOpen, HeartPulse, Home, Loader2, Map as MapIcon, Menu, Mic, Moon,
   MoreHorizontal, Package, ScanLine, ShoppingCart, Sun, TrendingUp, Truck, X,
@@ -26,6 +26,7 @@ import KhataDashboard from './pages/KhataDashboard';
 import Notifications from './pages/Notifications';
 import ScanReceipt from './pages/ScanReceipt';
 import Intakes from './pages/Intakes';
+import ErrorBoundary from './components/ErrorBoundary';
 import VoiceEntry from './pages/VoiceEntry';
 
 function ProtectedRoute({ children }) {
@@ -62,6 +63,7 @@ function useTheme() {
 
 function AppLayout() {
   const location = useLocation();
+  const navigate = useNavigate();
   const { t } = useTranslation();
   const { isDark, toggle } = useTheme();
   const { displayName, storeName } = useAuth();
@@ -186,6 +188,13 @@ function AppLayout() {
 
         <main className="app-main flex-1 overflow-y-auto p-4 md:p-8 pb-28 md:pb-8 bg-brand-surface">
           <div className="app-main max-w-5xl mx-auto h-full">
+            {/* Keyed on the path, so one broken screen does not take the nav
+                with it and navigating away clears the error by itself. */}
+            <ErrorBoundary
+              key={path}
+              onReset={() => navigate('/app')}
+              resetLabel="Back to home"
+            >
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/billing" element={<Billing />} />
@@ -201,6 +210,7 @@ function AppLayout() {
               <Route path="/notifications" element={<Notifications />} />
               <Route path="*" element={<Navigate to="/app" replace />} />
             </Routes>
+            </ErrorBoundary>
           </div>
         </main>
 
@@ -208,7 +218,7 @@ function AppLayout() {
             filtered out by their translated label, which left Score and Heatmap
             unreachable on a phone -- and broke entirely in Hindi. */}
         <nav
-          className="no-print md:hidden fixed bottom-0 inset-x-0 bg-brand-bg border-t border-brand-border px-1 py-2 flex justify-around items-center z-30"
+          className="no-print app-safe-bottom md:hidden fixed bottom-0 inset-x-0 bg-brand-bg border-t border-brand-border px-1 pt-2 flex justify-around items-center z-30"
           aria-label="Main"
         >
           {primaryNav.map((item) => {
@@ -243,7 +253,7 @@ function AppLayout() {
 
         {moreOpen && (
           <div className="md:hidden fixed inset-0 bg-black/50 z-40 flex items-end" onClick={() => setMoreOpen(false)}>
-            <div className="bg-brand-surface w-full rounded-t-3xl p-5 pb-8" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-brand-surface w-full rounded-t-3xl p-5 pb-8 app-safe-bottom max-h-[85dvh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
               <div className="flex justify-between items-center mb-4">
                 <h2 className="font-bold text-brand-ink">More</h2>
                 <button onClick={() => setMoreOpen(false)} aria-label="Close" className="text-brand-muted p-1">

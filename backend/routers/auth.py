@@ -11,11 +11,13 @@ security.get_current_vendor.
 """
 import hmac
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
+import audit
 import models
 import notifications
 import ratelimit
@@ -38,7 +40,7 @@ _CHALLENGE_INVALID = HTTPException(
 )
 
 
-def _issue_otp(vendor: models.Vendor, db: Session) -> str:
+def _issue_otp(vendor: models.Vendor, db: Session, request: Request = None) -> str:
     code = security.generate_otp()
     vendor.otp_code_hash = security.hash_otp(code)
     vendor.otp_expires_at = datetime.utcnow() + timedelta(minutes=settings.OTP_EXPIRE_MINUTES)
@@ -56,7 +58,54 @@ def _issue_otp(vendor: models.Vendor, db: Session) -> str:
     # read them.
     if settings.DEBUG_OTP:
         log.warning("OTP for %s (%s): %s", vendor.username or vendor.email, vendor.id, code)
+
+    audit.record(
+        db, audit.OTP_SENT, vendor=vendor, request=request,
+        detail=None if result.delivered else "delivery failed",
+    )
     return code
+
+
+def _refuse_if_locked(vendor, db: Session, request: Request) -> None:
+    """Stop a locked account before its password is even judged.
+
+    This does tell an attacker the account exists, where a wrong password for an
+    unknown username does not. That is a deliberate trade: the identifier-scoped
+    rate limiter already leaks the same thing, and the alternative is a
+    shopkeeper who is locked out being told "wrong password" for fifteen minutes
+    while they type the right one.
+    """
+    if vendor is None or not vendor.locked_until:
+        return
+    if vendor.locked_until <= datetime.utcnow():
+        return
+
+    remaining = int((vendor.locked_until - datetime.utcnow()).total_seconds())
+    audit.record(db, audit.LOGIN_LOCKED, vendor=vendor, request=request)
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail="Too many wrong passwords. Try again in a few minutes.",
+        headers={"Retry-After": str(max(1, remaining))},
+    )
+
+
+def _count_failure(vendor, db: Session, request: Request) -> None:
+    """One more wrong password, and the lock it may have earned."""
+    vendor.failed_logins = (vendor.failed_logins or 0) + 1
+    locked = vendor.failed_logins >= settings.LOGIN_MAX_FAILURES
+    if locked:
+        vendor.locked_until = datetime.utcnow() + timedelta(
+            minutes=settings.LOGIN_LOCKOUT_MINUTES
+        )
+        vendor.failed_logins = 0
+    db.commit()
+
+    audit.record(db, audit.LOGIN_FAILED, vendor=vendor, request=request)
+    if locked:
+        audit.record(
+            db, audit.ACCOUNT_LOCKED, vendor=vendor, request=request,
+            detail=f"locked for {settings.LOGIN_LOCKOUT_MINUTES} minutes",
+        )
 
 
 def _challenge(vendor: models.Vendor, message: str, code: str) -> schemas.ChallengeResponse:
@@ -112,7 +161,8 @@ def signup(req: schemas.SignupRequest, request: Request, db: Session = Depends(g
     db.commit()
     db.refresh(vendor)
 
-    code = _issue_otp(vendor, db)
+    audit.record(db, audit.SIGNUP, vendor=vendor, request=request)
+    code = _issue_otp(vendor, db, request)
     return _challenge(
         vendor, "Account created. Enter the verification code to finish signing in.", code
     )
@@ -135,6 +185,8 @@ def login(req: schemas.LoginRequest, request: Request, db: Session = Depends(get
         .first()
     )
 
+    _refuse_if_locked(vendor, db, request)
+
     # Always do the hashing work, even for an account that does not exist, so
     # the two cases take the same time.
     is_valid, needs_rehash = security.verify_password(
@@ -142,7 +194,20 @@ def login(req: schemas.LoginRequest, request: Request, db: Session = Depends(get
     )
 
     if not vendor or not is_valid:
+        if vendor is not None:
+            _count_failure(vendor, db, request)
+        else:
+            audit.record(db, audit.LOGIN_FAILED, request=request, identifier=identifier,
+                         detail="no such account")
         raise HTTPException(status_code=401, detail="Incorrect username or password")
+
+    # A good password clears the count. Only *consecutive* failures should ever
+    # lock an account, or a shopkeeper who fumbles their password once a month
+    # would eventually be locked out by their own history.
+    if vendor.failed_logins or vendor.locked_until:
+        vendor.failed_logins = 0
+        vendor.locked_until = None
+        db.commit()
 
     if needs_rehash:
         # Silently upgrade the old unsalted SHA-256 hash now that we have the
@@ -150,7 +215,8 @@ def login(req: schemas.LoginRequest, request: Request, db: Session = Depends(get
         vendor.password_hash = security.hash_password(req.password)
         db.commit()
 
-    code = _issue_otp(vendor, db)
+    audit.record(db, audit.LOGIN_SUCCESS, vendor=vendor, request=request)
+    code = _issue_otp(vendor, db, request)
     return _challenge(vendor, "Verification code sent to your registered phone.", code)
 
 
@@ -178,6 +244,10 @@ def verify_otp(req: schemas.OTPRequest, request: Request, db: Session = Depends(
             vendor.otp_code_hash = None
             vendor.otp_expires_at = None
         db.commit()
+        audit.record(
+            db, audit.OTP_EXHAUSTED if exhausted else audit.OTP_FAILED,
+            vendor=vendor, request=request,
+        )
         if exhausted:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -191,6 +261,7 @@ def verify_otp(req: schemas.OTPRequest, request: Request, db: Session = Depends(
     vendor.otp_attempts = 0
     db.commit()
 
+    audit.record(db, audit.SIGNED_IN, vendor=vendor, request=request)
     return schemas.TokenResponse(
         message="Signed in",
         token=security.create_access_token(vendor.id, epoch=vendor.token_epoch or 0),
@@ -212,7 +283,7 @@ def resend_otp(req: schemas.ResendOTPRequest, request: Request, db: Session = De
         settings.OTP_RATE_WINDOW_SECONDS,
         identifier=vendor.id,
     )
-    code = _issue_otp(vendor, db)
+    code = _issue_otp(vendor, db, request)
     return _challenge(vendor, "A new code is on its way.", code)
 
 
@@ -254,6 +325,7 @@ def forgot_password(
         result = notifications.send_password_reset(vendor.email or vendor.phone, link)
         if not result.delivered:
             log.error("Could not deliver a reset link to vendor %s: %s", vendor.id, result.detail)
+        audit.record(db, audit.PASSWORD_RESET_REQUESTED, vendor=vendor, request=request)
 
     return {"message": "If that account exists, a reset link is on its way."}
 
@@ -292,7 +364,13 @@ def reset_password(
     vendor.token_epoch = (vendor.token_epoch or 0) + 1
     vendor.otp_code_hash = None
     vendor.otp_expires_at = None
+    # Whoever was locked out is presumed to be the owner who just proved control
+    # of the inbox, so the lock goes with the old password.
+    vendor.failed_logins = 0
+    vendor.locked_until = None
     db.commit()
+
+    audit.record(db, audit.PASSWORD_RESET_COMPLETED, vendor=vendor, request=request)
     return None
 
 
@@ -319,11 +397,14 @@ def change_password(
     vendor.password_hash = security.hash_password(req.new_password)
     vendor.token_epoch = (vendor.token_epoch or 0) + 1
     db.commit()
+
+    audit.record(db, audit.PASSWORD_CHANGED, vendor=vendor, request=request)
     return None
 
 
 @router.post("/logout-all", status_code=204)
 def logout_everywhere(
+    request: Request,
     vendor: models.Vendor = Depends(security.get_current_vendor),
     db: Session = Depends(get_db),
 ):
@@ -331,7 +412,40 @@ def logout_everywhere(
     this stops it being accepted."""
     vendor.token_epoch = (vendor.token_epoch or 0) + 1
     db.commit()
+
+    audit.record(db, audit.LOGOUT_ALL, vendor=vendor, request=request)
     return None
+
+
+@router.get("/security-log", response_model=List[schemas.SecurityEventResponse])
+def security_log(
+    limit: int = Query(50, ge=1, le=200),
+    vendor: models.Vendor = Depends(security.get_current_vendor),
+    db: Session = Depends(get_db),
+):
+    """This account's own sign-in history.
+
+    Scoped to the caller by the token, like everything else -- there is no
+    vendor_id parameter to tamper with. A shopkeeper seeing a sign-in they did
+    not make is usually the first and only warning that a password has leaked,
+    so this is worth a screen of its own.
+    """
+    return [
+        schemas.SecurityEventResponse(
+            id=row.id,
+            event=row.event,
+            description=audit.DESCRIPTIONS.get(row.event, row.event),
+            outcome=row.outcome,
+            device=audit.describe_device(row.user_agent),
+            ip=row.ip,
+            detail=row.detail,
+            # Stamped as UTC rather than left bare. A timestamp with no zone is
+            # read as local time by every browser, which turned "just now" into
+            # "5h ago" for a shop in India.
+            at=row.created_at.replace(tzinfo=timezone.utc),
+        )
+        for row in audit.recent(db, vendor.id, limit)
+    ]
 
 
 @router.get("/me", response_model=schemas.VendorResponse)

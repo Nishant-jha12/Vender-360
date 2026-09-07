@@ -1,21 +1,31 @@
+# Lower bounds rather than exact pins, deliberately.
+#
+# This used to pin fastapi==0.103.1 / pydantic==2.3.0 from 2023. Those have no
+# wheels for Python 3.12+, so `pip install -r requirements.txt` on a current
+# Python tried to compile pydantic-core from Rust source and failed on any
+# machine without the MSVC linker and a Rust toolchain. Ranges let pip pick a
+# build that exists for the interpreter you actually have.
+#
+# Verified against the versions in the comments, on Python 3.13.
+
 # Core API
-fastapi==0.103.1
-uvicorn[standard]==0.23.2
-sqlalchemy==2.0.20
-pydantic==2.3.0
+fastapi>=0.110,<1.0            # tested: 0.135.1
+uvicorn[standard]>=0.30,<1.0   # tested: 0.41.0
+sqlalchemy>=2.0.30,<2.1        # tested: 2.0.52
+pydantic>=2.9,<3.0             # tested: 2.12.5  (2.9 is the first with cp313 wheels)
 
 # UPI QR rendering. Without these the API still starts and every other
 # endpoint works; only /api/checkout/generate-upi-qr returns 503.
-qrcode==7.4.2
-pillow==10.4.0
+qrcode>=7.4,<9                 # tested: 8.2
+pillow>=10.4                   # tested: 11.3.0
 
 # Postgres driver. SQLite is the default and needs nothing; this is here so
 # DATABASE_URL=postgresql+psycopg://... works without a second install step.
-psycopg[binary]==3.2.3
+psycopg[binary]>=3.2,<4        # tested: 3.2.3
 
 # Tests
-pytest==7.4.4
-httpx==0.25.2
+pytest>=8.0                    # tested: 9.1.1
+httpx>=0.27                    # tested: 0.28.1
 
 # Auth deliberately uses the standard library (PBKDF2-HMAC-SHA256 for passwords,
 # HS256 JWTs built on hmac/hashlib) rather than adding bcrypt and PyJWT.

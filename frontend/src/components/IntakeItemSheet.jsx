@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AlertTriangle, Box, Loader2, PackageOpen } from 'lucide-react';
+import { AlertTriangle, Box, Loader2, PackageOpen, Sparkles } from 'lucide-react';
 import { api, errorMessage } from '../lib/api';
 import { money, qty as fmtQty } from '../lib/format';
 import { useToast } from './Toast';
@@ -21,14 +21,17 @@ const dateInput = (value) => (value ? String(value).slice(0, 10) : '');
  *     needed to create the product, so an unknown barcode costs one form once
  *     rather than a trip to the Inventory screen.
  */
-export default function IntakeItemSheet({ suggestion, barcode, onClose, onAdded }) {
+export default function IntakeItemSheet({ suggestion, barcode, found, details, onClose, onAdded }) {
   const toast = useToast();
   const isNew = !suggestion;
   const [saving, setSaving] = useState(false);
 
   const [form, setForm] = useState({
-    sku_name: suggestion?.sku_name || '',
-    category: 'General',
+    // `found` is what the barcode itself yielded: name, brand and size from an
+    // open product database. It is a starting point, not a fact -- every field
+    // stays editable, and the price is never guessed.
+    sku_name: suggestion?.sku_name || found?.sku_name || '',
+    category: found?.category || 'General',
     unit: 'unit',
     packs: suggestion?.packs ?? 1,
     pack_type: suggestion ? 'carton' : 'loose',
@@ -124,7 +127,45 @@ export default function IntakeItemSheet({ suggestion, barcode, onClose, onAdded 
             <p className="text-xs text-brand-muted -mt-2">
               Barcode <span className="font-mono font-bold text-brand-ink">{barcode}</span> isn&apos;t
               in your catalogue. Add it once — every future scan will know it.
+              {details?.country && (
+                <> Registered in <span className="text-brand-ink">{details.country}</span>.</>
+              )}
             </p>
+
+            {details?.check_digit_valid === false && (
+              <div className="flex gap-2.5 items-start bg-brand-danger/10 border border-brand-danger/30 rounded-2xl p-3">
+                <AlertTriangle size={16} className="text-brand-danger shrink-0 mt-0.5" />
+                <p className="text-xs text-brand-ink">
+                  This number fails its own check digit, so it was probably misread.
+                  Scan it again before saving — a wrong barcode can never be scanned back.
+                </p>
+              </div>
+            )}
+
+            {found && (
+              <div className="flex gap-3 items-start bg-brand-primary/5 border border-brand-primary/25 rounded-2xl p-3">
+                {found.image_url ? (
+                  <img
+                    src={found.image_url}
+                    alt=""
+                    className="w-12 h-12 rounded-lg object-contain bg-white shrink-0"
+                    onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                  />
+                ) : (
+                  <Sparkles size={16} className="text-brand-primary shrink-0 mt-0.5" />
+                )}
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-brand-ink">Filled in from the barcode</p>
+                  <p className="text-[11px] text-brand-muted mt-0.5">
+                    {[found.brand, found.size].filter(Boolean).join(' · ')}
+                    {found.source && <> — {found.source}</>}
+                  </p>
+                  <p className="text-[10px] text-brand-muted mt-1">
+                    Check it against the packet. Prices are always yours to set.
+                  </p>
+                </div>
+              </div>
+            )}
             <Field label="Product name" required>
               <input required autoFocus value={form.sku_name} onChange={set('sku_name')} className={inputClass} placeholder="Maggi Noodles 70g" />
             </Field>

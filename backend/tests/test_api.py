@@ -1,6 +1,8 @@
 """The paths where being wrong costs money: stock movement, margin, khata
 balance -- plus the tenant isolation that used to be missing entirely.
 """
+import pytest
+
 from datetime import datetime, timedelta
 
 from conftest import sign_in
@@ -1294,3 +1296,395 @@ def test_long_dated_stock_is_not_flagged(client, vendor):
     body = client.post("/api/intake/scan", headers=headers,
                        json={"barcode": product["barcode"]}).json()
     assert body["suggestion"]["short_dated"] is False
+
+
+# --------------------------------------------------------------------------
+# Barcode lookup
+# --------------------------------------------------------------------------
+def test_the_number_alone_gives_check_digit_and_country(client, vendor):
+    """Works with no network at all, which is the point -- a shop with patchy
+    signal still gets told a barcode was misread."""
+    headers, _ = vendor
+
+    ok = client.get("/api/inventory/lookup/8901058000108", headers=headers).json()
+    assert ok["check_digit_valid"] is True
+    assert ok["country"] == "India"
+    assert ok["symbology"] == "EAN-13"
+
+    # One digit changed: caught before it becomes a product nobody can re-scan.
+    bad = client.get("/api/inventory/lookup/8901058000109", headers=headers).json()
+    assert bad["check_digit_valid"] is False
+
+
+def test_lookup_reports_a_barcode_the_shop_already_stocks(client, vendor):
+    headers, _ = vendor
+    product = _loose(client, headers)
+
+    body = client.get(f"/api/inventory/lookup/{product['barcode']}", headers=headers).json()
+    assert body["known_locally"] is True
+    assert body["item"]["sku_name"] == product["sku_name"]
+    # No point asking a third party about a product we already have.
+    assert body["product"] is None
+
+
+def test_lookup_tolerates_spaces_and_dashes(client, vendor):
+    headers, _ = vendor
+    body = client.get("/api/inventory/lookup/890-1058 000108", headers=headers).json()
+    assert body["barcode"] == "8901058000108"
+    assert body["check_digit_valid"] is True
+
+
+def test_lookup_is_scoped_to_one_vendor(client, vendor):
+    headers, _ = vendor
+    product = _loose(client, headers)
+    other_headers, _ = _other_vendor(client, "otherlookup")
+
+    mine = client.get(f"/api/inventory/lookup/{product['barcode']}", headers=headers).json()
+    theirs = client.get(f"/api/inventory/lookup/{product['barcode']}", headers=other_headers).json()
+    assert mine["known_locally"] is True
+    assert theirs["known_locally"] is False
+
+
+def test_lookup_requires_a_token(client):
+    assert client.get("/api/inventory/lookup/8901058000108").status_code == 401
+
+
+def test_external_lookup_is_off_unless_enabled(client, vendor, monkeypatch):
+    """It sends the barcode to a third party, so it must be opted into."""
+    import barcodes
+    from config import settings
+
+    monkeypatch.setattr(settings, "BARCODE_LOOKUP_ENABLED", False)
+    called = []
+    monkeypatch.setattr(barcodes, "_fetch_remote", lambda code: called.append(code))
+
+    headers, _ = vendor
+    body = client.get("/api/inventory/lookup/8901058000108", headers=headers).json()
+    assert body["product"] is None
+    assert called == []
+
+
+def test_a_looked_up_barcode_is_cached_not_refetched(client, vendor, monkeypatch):
+    import barcodes
+    from config import settings
+
+    monkeypatch.setattr(settings, "BARCODE_LOOKUP_ENABLED", True)
+    calls = []
+
+    def fake(code):
+        calls.append(code)
+        return {"sku_name": "Maggi Noodles 70g", "brand": "Nestle", "size": "70 g",
+                "category": "Instant noodles", "image_url": None, "source": "Test DB"}
+
+    monkeypatch.setattr(barcodes, "_fetch_remote", fake)
+    headers, _ = vendor
+
+    first = client.get("/api/inventory/lookup/8901058000108", headers=headers).json()
+    second = client.get("/api/inventory/lookup/8901058000108", headers=headers).json()
+
+    assert first["product"]["sku_name"] == "Maggi Noodles 70g"
+    assert second["product"]["sku_name"] == "Maggi Noodles 70g"
+    # Fetched once; the second scan is served from the cache, so it also works
+    # with no signal.
+    assert len(calls) == 1
+
+
+def test_scanning_an_unknown_barcode_returns_the_product_details(client, vendor, monkeypatch):
+    """The whole point: the form opens filled in rather than empty."""
+    import barcodes
+    from config import settings
+
+    monkeypatch.setattr(settings, "BARCODE_LOOKUP_ENABLED", True)
+    monkeypatch.setattr(barcodes, "_fetch_remote", lambda code: {
+        "sku_name": "Britannia Good Day Cashew", "brand": "Britannia", "size": "100 g",
+        "category": "Biscuits", "image_url": None, "source": "Test DB",
+    })
+
+    headers, _ = vendor
+    body = client.post("/api/intake/scan", headers=headers,
+                       json={"barcode": "8901063014916"}).json()
+
+    assert body["status"] == "unknown"
+    assert body["product"]["sku_name"] == "Britannia Good Day Cashew"
+    assert body["details"]["country"] == "India"
+    assert "found from the barcode" in body["message"]
+
+
+def test_a_misread_barcode_is_never_looked_up(client, vendor, monkeypatch):
+    """Looking up a mistyped number can only return someone else's product."""
+    import barcodes
+    from config import settings
+
+    monkeypatch.setattr(settings, "BARCODE_LOOKUP_ENABLED", True)
+    called = []
+    monkeypatch.setattr(barcodes, "_fetch_remote", lambda code: called.append(code))
+
+    headers, _ = vendor
+    body = client.post("/api/intake/scan", headers=headers,
+                       json={"barcode": "8901058000109"}).json()
+
+    assert body["details"]["check_digit_valid"] is False
+    assert body["product"] is None
+    assert called == []
+    assert "check digit" in body["message"]
+
+
+def test_a_provider_failure_does_not_break_the_scan(client, vendor, monkeypatch):
+    """A convenience lookup must never cost the shopkeeper the scan itself."""
+    import barcodes
+    from config import settings
+
+    monkeypatch.setattr(settings, "BARCODE_LOOKUP_ENABLED", True)
+
+    def boom(code):
+        raise RuntimeError("provider exploded")
+
+    monkeypatch.setattr(barcodes, "_fetch_remote", boom)
+    headers, _ = vendor
+
+    body = client.post("/api/intake/scan", headers=headers,
+                       json={"barcode": "8901058000108"})
+    assert body.status_code == 200, body.text
+    payload = body.json()
+    assert payload["status"] == "unknown"
+    assert payload["product"] is None
+    # The offline part still works even when the network part blew up.
+    assert payload["details"]["country"] == "India"
+
+
+def test_a_category_is_only_taken_when_it_is_english():
+    """The provider bolts "en:" onto free text it does not recognise, so the
+    prefix alone is no guarantee. A jar of Nutella really does offer both."""
+    import barcodes
+
+    nutella = {"categories_tags": [
+        "en:breakfasts", "en:spreads", "en:sweet-spreads",
+        "en:confectionary-based-spreads",
+        "en:Petit-d\u00e9jeuners", "en:P\u00e2tes \u00e0 tartiner",
+    ]}
+    # The most specific real taxonomy entry, not the French text after it.
+    assert barcodes._english_category(nutella) == "Confectionary based spreads"
+
+    # Nothing usable is better than a foreign phrase in the shop's catalogue.
+    assert barcodes._english_category({"categories_tags": ["en:P\u00e2tes \u00e0 tartiner"]}) is None
+    assert barcodes._english_category({"categories_tags": ["fr:biscuits"]}) is None
+    assert barcodes._english_category({}) is None
+
+
+def test_a_brand_already_in_the_name_is_not_repeated():
+    """Punctuation is ignored, or "Lay's" reads as absent from "Lays Classics"
+    and the shopkeeper gets "Lay's Lays Classics Salted"."""
+    import barcodes
+
+    assert barcodes._mentions("Lays Classics Salted", "Lay's") is True
+    assert barcodes._mentions("Good Day Cashew", "Britannia") is False
+
+
+# --------------------------------------------------------------------------
+# Security log and account lockout
+# --------------------------------------------------------------------------
+def _events(client, headers):
+    response = client.get("/api/auth/security-log", headers=headers)
+    assert response.status_code == 200, response.text
+    return [row["event"] for row in response.json()]
+
+
+def test_signing_in_is_written_to_the_security_log(client, vendor):
+    headers, _ = vendor
+    events = _events(client, headers)
+    # Newest first, and both factors are separate lines: the password step can
+    # succeed and the code step still fail.
+    assert events[0] == "signed_in"
+    assert "signup" in events and "otp.sent" in events
+
+
+def test_a_wrong_password_is_recorded_against_the_account(client, vendor):
+    headers, _ = vendor
+    client.post("/api/auth/login", json={"identifier": "testowner", "password": "wrong-one"})
+
+    log = client.get("/api/auth/security-log", headers=headers).json()
+    failed = [row for row in log if row["event"] == "login.failed"]
+    assert len(failed) == 1
+    assert failed[0]["outcome"] == "denied"
+    assert failed[0]["description"] == "Wrong password"
+
+
+def test_the_log_says_which_device_in_words(client, vendor):
+    headers, _ = vendor
+    ua = ("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) "
+          "Chrome/120.0 Mobile Safari/537.36")
+    client.post(
+        "/api/auth/login",
+        json={"identifier": "testowner", "password": "wrong-one"},
+        headers={"User-Agent": ua},
+    )
+    log = client.get("/api/auth/security-log", headers=headers).json()
+    assert log[0]["device"] == "Chrome on Android"
+
+
+def test_the_security_log_is_scoped_to_the_caller(client, vendor):
+    """It carries addresses and devices, so the tenant boundary matters here
+    more than anywhere else."""
+    headers, _ = vendor
+    client.post("/api/auth/login", json={"identifier": "testowner", "password": "wrong-one"})
+    other_headers, _ = _other_vendor(client, "nosyneighbour")
+
+    assert "login.failed" in _events(client, headers)
+    assert "login.failed" not in _events(client, other_headers)
+
+
+def test_the_security_log_requires_a_token(client):
+    assert client.get("/api/auth/security-log").status_code == 401
+
+
+def test_a_failed_login_for_an_unknown_account_is_still_recorded(client, db_session):
+    """The most interesting row of all, and it belongs to no vendor."""
+    import models
+
+    client.post("/api/auth/login", json={"identifier": "ghost@example.com", "password": "guess"})
+    row = (
+        db_session.query(models.SecurityEvent)
+        .filter(models.SecurityEvent.event == "login.failed")
+        .one()
+    )
+    assert row.vendor_id is None
+    assert row.identifier == "ghost@example.com"
+    assert row.detail == "no such account"
+
+
+def test_repeated_wrong_passwords_lock_the_account(client, vendor, monkeypatch):
+    from config import settings
+
+    monkeypatch.setattr(settings, "LOGIN_MAX_FAILURES", 3)
+    # High enough that the in-memory limiter is not what stops this.
+    monkeypatch.setattr(settings, "LOGIN_RATE_LIMIT", 1000)
+
+    headers, _ = vendor
+    for _ in range(3):
+        assert client.post(
+            "/api/auth/login", json={"identifier": "testowner", "password": "wrong-one"}
+        ).status_code == 401
+
+    # Now even the correct password is refused, which is the point.
+    locked = client.post(
+        "/api/auth/login", json={"identifier": "testowner", "password": "a-good-password"}
+    )
+    assert locked.status_code == 429
+    assert "Retry-After" in locked.headers
+    assert "account.locked" in _events(client, headers)
+
+
+def test_the_lock_survives_a_restart(client, vendor, monkeypatch):
+    """The whole reason this is not left to the rate limiter, whose counters a
+    deploy or a crash loop empties."""
+    import ratelimit
+    from config import settings
+
+    monkeypatch.setattr(settings, "LOGIN_MAX_FAILURES", 3)
+    monkeypatch.setattr(settings, "LOGIN_RATE_LIMIT", 1000)
+
+    for _ in range(3):
+        client.post("/api/auth/login", json={"identifier": "testowner", "password": "wrong-one"})
+
+    ratelimit.reset()  # what a restart does to the in-memory counters
+
+    assert client.post(
+        "/api/auth/login", json={"identifier": "testowner", "password": "a-good-password"}
+    ).status_code == 429
+
+
+def test_a_good_password_clears_the_failure_count(client, vendor, monkeypatch):
+    """Only consecutive failures should lock, or a shopkeeper who fumbles once a
+    month is eventually locked out by their own history."""
+    from config import settings
+
+    monkeypatch.setattr(settings, "LOGIN_MAX_FAILURES", 3)
+    monkeypatch.setattr(settings, "LOGIN_RATE_LIMIT", 1000)
+
+    for _ in range(2):
+        client.post("/api/auth/login", json={"identifier": "testowner", "password": "wrong-one"})
+    assert client.post(
+        "/api/auth/login", json={"identifier": "testowner", "password": "a-good-password"}
+    ).status_code == 200
+
+    for _ in range(2):
+        client.post("/api/auth/login", json={"identifier": "testowner", "password": "wrong-one"})
+    assert client.post(
+        "/api/auth/login", json={"identifier": "testowner", "password": "a-good-password"}
+    ).status_code == 200
+
+
+def test_an_expired_lock_lets_the_owner_back_in(client, vendor, db_session, monkeypatch):
+    import models
+    from config import settings
+
+    monkeypatch.setattr(settings, "LOGIN_MAX_FAILURES", 3)
+    monkeypatch.setattr(settings, "LOGIN_RATE_LIMIT", 1000)
+
+    for _ in range(3):
+        client.post("/api/auth/login", json={"identifier": "testowner", "password": "wrong-one"})
+
+    row = db_session.query(models.Vendor).filter(models.Vendor.username == "testowner").one()
+    row.locked_until = datetime.utcnow() - timedelta(seconds=1)
+    db_session.commit()
+
+    assert client.post(
+        "/api/auth/login", json={"identifier": "testowner", "password": "a-good-password"}
+    ).status_code == 200
+
+
+def test_changing_the_password_is_recorded(client, vendor):
+    headers, _ = vendor
+    assert client.post(
+        "/api/auth/change-password",
+        headers=headers,
+        json={"current_password": "a-good-password", "new_password": "an-even-better-password"},
+    ).status_code == 204
+
+    # The old token is dead, so sign in again to read the log back.
+    fresh = client.post(
+        "/api/auth/login",
+        json={"identifier": "testowner", "password": "an-even-better-password"},
+    ).json()
+    token = client.post(
+        "/api/auth/verify-otp",
+        json={"challenge_token": fresh["challenge_token"], "otp": "123456"},
+    ).json()["token"]
+
+    assert "password.changed" in _events(client, {"Authorization": f"Bearer {token}"})
+
+
+def test_a_broken_audit_write_does_not_break_signing_in(client, vendor, monkeypatch):
+    """A missing audit row is bad. A till that will not open is worse."""
+    import models
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("audit table is locked")
+
+    monkeypatch.setattr(models, "SecurityEvent", explode)
+    response = client.post(
+        "/api/auth/login", json={"identifier": "testowner", "password": "a-good-password"}
+    )
+    assert response.status_code == 200
+
+
+def test_old_events_are_pruned(client, vendor, db_session, monkeypatch):
+    """Addresses and devices are personal data; they should not accumulate
+    forever just because nobody deleted them."""
+    import audit
+    import models
+    from config import settings
+
+    headers, vendor_id = vendor
+    stale = models.SecurityEvent(
+        vendor_id=vendor_id, event="login.failed", outcome="denied",
+        created_at=datetime.utcnow() - timedelta(days=settings.SECURITY_LOG_RETENTION_DAYS + 1),
+    )
+    db_session.add(stale)
+    db_session.commit()
+    assert "login.failed" in _events(client, headers)
+
+    monkeypatch.setattr(audit, "_last_prune", 0.0)  # the hourly guard
+    audit.record(db_session, audit.LOGIN_SUCCESS, vendor_id=vendor_id)
+
+    assert "login.failed" not in _events(client, headers)

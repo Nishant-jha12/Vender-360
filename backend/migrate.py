@@ -21,6 +21,9 @@ COLUMNS = [
     ("vendors", "reset_expires_at", "DATETIME"),
     ("vendors", "otp_code_hash", "VARCHAR"),
     ("vendors", "otp_expires_at", "DATETIME"),
+    # Lockout state that has to outlive a restart; see models.Vendor.
+    ("vendors", "failed_logins", "INTEGER DEFAULT 0"),
+    ("vendors", "locked_until", "DATETIME"),
     ("inventory_items", "expiry_date", "DATETIME"),
     ("inventory_items", "barcode", "VARCHAR"),
     ("inventory_items", "sale_count", "INTEGER DEFAULT 0"),

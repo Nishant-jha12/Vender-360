@@ -5,7 +5,9 @@ import { api, errorMessage } from '../lib/api';
 import { qty as fmtQty } from '../lib/format';
 import { useToast } from '../components/Toast';
 
-const LANG_MAP = { en: 'en-IN', hi: 'hi-IN', mr: 'mr-IN' };
+// Every language offered in Account must appear here, or voice logging listens
+// in English while the rest of the screen is not.
+const LANG_MAP = { en: 'en-IN', hi: 'hi-IN', mr: 'mr-IN', bn: 'bn-IN' };
 
 /**
  * Speak a stock change, confirm it, then save.

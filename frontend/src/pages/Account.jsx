@@ -10,6 +10,8 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../components/Toast';
 import { CardSkeleton, ErrorState } from '../components/States';
 import { useApi } from '../hooks/useApi';
+import SecurityLog from '../components/SecurityLog';
+import { LANGUAGES } from '../i18n';
 
 export default function Account() {
   const { t, i18n } = useTranslation();
@@ -176,6 +178,14 @@ export default function Account() {
         )}
       </div>
 
+      <SecurityLog
+        onSignedOutEverywhere={() => {
+          // The token this tab holds was just revoked along with the rest.
+          logout();
+          navigate('/auth', { replace: true });
+        }}
+      />
+
       <div className="bg-brand-surface rounded-2xl border border-brand-border shadow-sm p-4">
         <h3 className="text-sm font-bold text-brand-ink flex items-center gap-2 mb-3">
           <Globe size={16} className="text-brand-muted" /> {t('account.language')}
@@ -186,9 +196,11 @@ export default function Account() {
           aria-label={t('account.language')}
           className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2.5 text-sm text-brand-ink font-semibold focus:outline-none focus:ring-2 focus:ring-brand-primary"
         >
-          <option value="en">English</option>
-          <option value="hi">हिंदी (Hindi)</option>
-          <option value="mr">मराठी (Marathi)</option>
+          {/* Driven off the shared list, so adding a language in i18n.js
+              cannot leave this switcher behind. */}
+          {LANGUAGES.map((lang) => (
+            <option key={lang.code} value={lang.code}>{lang.label}</option>
+          ))}
         </select>
       </div>
 

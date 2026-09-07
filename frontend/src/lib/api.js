@@ -70,7 +70,16 @@ export function errorMessage(error, fallback = 'Something went wrong. Please try
   }
   if (error?.code === 'ECONNABORTED') return 'The server took too long to respond.';
   if (error?.message === 'Network Error') {
-    return 'Cannot reach the server. Is the backend running on port 8000?';
+    // A stopped server and a blocked origin are indistinguishable here -- the
+    // browser withholds the response either way -- so name both. Saying only
+    // "is the backend running?" sends people to check a server that is fine
+    // while the real problem is that this page's origin is not allowed.
+    const base = api.defaults.baseURL;
+    return (
+      `Cannot reach ${base} from ${window.location.origin}. ` +
+      'Either the backend is not running, or this page\'s address is missing from ' +
+      'CORS_ORIGINS in backend/.env (Vite moves to port 5174 when 5173 is taken).'
+    );
   }
   return fallback;
 }

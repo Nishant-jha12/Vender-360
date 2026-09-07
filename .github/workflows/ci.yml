@@ -4,6 +4,10 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  # A dependency is not vulnerable on the day you add it -- it becomes
+  # vulnerable later, on a day nobody is pushing. Check on a schedule too.
+  schedule:
+    - cron: "0 3 * * 1"
 
 jobs:
   backend:
@@ -86,6 +90,44 @@ jobs:
         working-directory: frontend
         run: npm run lint
 
+      # A missing translation key falls back to English rather than failing, so
+      # a half-added language is invisible at runtime. Catch it here instead.
+      - name: Translations are complete in every language
+        working-directory: frontend
+        run: npm run i18n:check
+
       - name: Build
         working-directory: frontend
         run: npm run build
+
+  vulnerabilities:
+    name: Dependencies carry no known vulnerabilities
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # requirements.txt carries ranges rather than pins, so this audits what a
+      # fresh install would actually resolve to today -- which is the thing that
+      # ends up on the server.
+      - name: Python advisories (PyPI + OSV)
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          pip-audit -r requirements.txt --progress-spinner off
+
+      # Only production dependencies: a build-time advisory in a linter does not
+      # reach the shopkeeper's browser, and failing on it trains people to
+      # ignore this job.
+      - name: npm advisories
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=moderate
