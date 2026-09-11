@@ -1,11 +1,16 @@
 import { useEffect, useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Eye, EyeOff, Loader2, Lock } from 'lucide-react';
+import { ArrowLeft, Eye, EyeOff, Loader2, Lock, Moon, Sun } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { LANGUAGES } from '../i18n';
 import { api, errorMessage } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
+import { useTheme } from '../context/ThemeContext';
 import { useToast } from '../components/Toast';
 
 export default function Auth() {
+  const { i18n } = useTranslation();
+  const { isDark, toggle: toggleTheme } = useTheme();
   const [mode, setMode] = useState('login'); // login | signup | otp | forgot | reset
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -162,28 +167,57 @@ export default function Auth() {
   const [title, subtitle] = headings[mode];
 
   return (
-    <div className="min-h-screen bg-brand-bg flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
-        <Link to="/" className="block text-center mb-4 text-sm font-bold text-brand-muted hover:text-brand-ink">
-          ← Back to home
-        </Link>
-
-        <div className="bg-brand-surface border border-brand-border rounded-3xl shadow-xl overflow-hidden">
-          <div className="bg-brand-primary text-brand-on-primary p-6 text-center relative">
+    <div className="min-h-screen bg-slate-100 dark:bg-neutral-950 flex flex-col items-center justify-center p-0 md:py-6 selection:bg-brand-primary selection:text-white font-roboto antialiased">
+      <div className="w-full max-w-md h-screen md:h-auto md:min-h-[640px] md:rounded-[36px] bg-brand-surface border-0 md:border md:border-brand-border/80 shadow-2xl overflow-hidden flex flex-col justify-between">
+        <div>
+          {/* Mobile App Header */}
+          <div className="bg-brand-primary text-brand-on-primary p-5 text-center relative shrink-0">
             {(mode === 'otp' || mode === 'forgot' || mode === 'reset') && (
               <button
                 onClick={() => setMode('login')}
                 aria-label="Go back"
-                className="absolute left-4 top-6 opacity-80 hover:opacity-100 focus-visible:ring-2 focus-visible:ring-white rounded outline-none"
+                className="absolute left-4 top-5 opacity-80 hover:opacity-100 focus-visible:ring-2 focus-visible:ring-white rounded-full p-1 outline-none"
               >
                 <ArrowLeft size={22} />
               </button>
             )}
-            <div className="w-12 h-12 rounded-full bg-white/20 flex items-center justify-center mx-auto mb-3">
-              <Lock size={22} />
+
+            {/* Theme Toggle */}
+            <button
+              type="button"
+              onClick={toggleTheme}
+              aria-label={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
+              className="absolute right-4 top-5 w-8 h-8 rounded-full bg-white/15 hover:bg-white/25 active:scale-95 text-white flex items-center justify-center transition-all outline-none"
+            >
+              {isDark ? <Sun size={17} className="text-amber-300" /> : <Moon size={17} />}
+            </button>
+
+            {/* Language Switcher Pill */}
+            <div className="flex justify-center gap-1.5 mb-2.5">
+              {LANGUAGES.map((l) => (
+                <button
+                  key={l.code}
+                  type="button"
+                  onClick={() => {
+                    i18n.changeLanguage(l.code);
+                    localStorage.setItem('vendor_lang', l.code);
+                  }}
+                  className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold transition-all ${
+                    i18n.language === l.code
+                      ? 'bg-white text-brand-primary shadow-sm'
+                      : 'bg-white/20 text-white/90 hover:bg-white/30'
+                  }`}
+                >
+                  {l.code === 'en' ? 'English' : l.code === 'hi' ? 'हिंदी' : l.code === 'mr' ? 'मराठी' : 'বাংলা'}
+                </button>
+              ))}
             </div>
-            <h1 className="text-2xl font-bold font-inter">{title}</h1>
-            <p className="opacity-80 text-sm mt-1">{subtitle}</p>
+
+            <div className="w-11 h-11 rounded-2xl bg-white/20 flex items-center justify-center mx-auto mb-2 border border-white/30 shadow-sm font-inter font-bold text-xl">
+              V
+            </div>
+            <h1 className="text-xl font-bold font-inter">{title}</h1>
+            <p className="opacity-85 text-xs mt-0.5">{subtitle}</p>
           </div>
 
           <div className="p-6">
@@ -364,6 +398,16 @@ export default function Auth() {
               </form>
             )}
           </div>
+        </div>
+
+        {/* In-App Legal Footer */}
+        <div className="p-3.5 border-t border-brand-border/40 text-center bg-brand-bg/50 shrink-0">
+          <p className="text-[11px] text-brand-muted">
+            Vendor360 Kirana App •{' '}
+            <Link to="/legal" className="text-brand-primary font-semibold hover:underline">
+              Terms & Privacy Policy
+            </Link>
+          </p>
         </div>
       </div>
     </div>
