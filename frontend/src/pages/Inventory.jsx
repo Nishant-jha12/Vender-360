@@ -137,11 +137,13 @@ export default function Inventory() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h2 className="text-xl font-bold text-brand-ink font-inter">{t('inventory.title')}</h2>
-          <p className="text-xs text-brand-muted">{items.length} product{items.length === 1 ? '' : 's'}</p>
+          <p className="text-xs text-brand-muted">
+            {items.length === 1 ? t('inventory_extra.products_count', { count: items.length }) : t('inventory_extra.products_count_plural', { count: items.length })}
+          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button onClick={() => setEditing({ ...BLANK_ITEM })} className="text-xs bg-brand-primary text-brand-on-primary px-4 py-2 rounded-2xl font-bold flex items-center gap-1.5 shadow-sm hover:bg-brand-primary-dark transition-colors focus-visible:ring-2 focus-visible:ring-brand-primary outline-none">
-            <Plus size={15} /> Add product
+            <Plus size={15} /> {t('inventory_extra.add_product')}
           </button>
           <button onClick={exportCSV} disabled={!items.length} className="text-xs bg-brand-surface border border-brand-border px-3.5 py-2 rounded-2xl font-semibold text-brand-ink flex items-center gap-1.5 shadow-sm hover:bg-brand-bg transition-colors disabled:opacity-50">
             <FileText size={15} /> CSV
@@ -160,7 +162,7 @@ export default function Inventory() {
           type="search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by name or barcode number..."
+          placeholder={t('inventory_extra.search_placeholder')}
           aria-label="Search inventory"
           className="w-full bg-brand-surface border border-brand-border rounded-2xl pl-11 pr-4 py-2.5 text-sm text-brand-ink shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-primary"
         />
@@ -173,16 +175,16 @@ export default function Inventory() {
       ) : items.length === 0 ? (
         <EmptyState
           icon={Package}
-          title="Your catalogue is empty"
-          description="Add the products you sell, and they will show up on the billing screen ready to tap."
+          title={t('inventory_extra.catalogue_empty')}
+          description={t('inventory_extra.catalogue_empty_desc')}
           action={
             <button onClick={() => setEditing({ ...BLANK_ITEM })} className="bg-brand-primary text-brand-on-primary text-xs font-bold px-5 py-2.5 rounded-2xl">
-              Add your first product
+              {t('inventory_extra.add_first_product')}
             </button>
           }
         />
       ) : filtered.length === 0 ? (
-        <EmptyState icon={Search} title="Nothing matched that search" description="Try a shorter term." />
+        <EmptyState icon={Search} title={t('common.nothing_matched')} description={t('inventory_extra.search_placeholder')} />
       ) : (
         <ul className="space-y-3">
           {filtered.map((item) => {
@@ -197,12 +199,12 @@ export default function Inventory() {
                     <p className="font-bold text-brand-ink text-sm md:text-base">{item.sku_name}</p>
                     {nearExpiry && (
                       <span className="text-[10px] bg-brand-danger/15 text-brand-danger px-2 py-0.5 rounded-md font-extrabold uppercase">
-                        Expiring soon
+                        {t('expiry.expiring_soon')}
                       </span>
                     )}
                     {lowStock && (
                       <span className="text-[10px] bg-brand-amber/20 text-brand-amber px-2 py-0.5 rounded-md font-extrabold uppercase">
-                        Low stock
+                        {t('inventory_extra.low_stock')}
                       </span>
                     )}
                   </div>
@@ -211,7 +213,7 @@ export default function Inventory() {
                       {item.category}
                     </span>
                     <span className="text-[11px] bg-brand-primary/10 text-brand-primary px-2 py-0.5 rounded-md font-bold">
-                      Cost {money(item.cost_price)} · Sell {money(item.selling_price)}
+                      {t('inventory_extra.cost')} {money(item.cost_price)} · {t('inventory_extra.sell')} {money(item.selling_price)}
                     </span>
                     {item.expiry_date && (
                       <span className="text-[11px] text-brand-muted flex items-center gap-1">
