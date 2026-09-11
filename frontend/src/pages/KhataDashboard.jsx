@@ -138,7 +138,7 @@ export default function KhataDashboard() {
                     </p>
                     <p className="text-[10px] uppercase font-bold text-brand-muted tracking-wide">
                       {/* An overpayment is money the shop is holding, not money owed. */}
-                      {balance > 0 ? 'Outstanding' : inAdvance ? 'In advance' : t('khata.settled')}
+                      {balance > 0 ? t('khata_extra.outstanding') : inAdvance ? t('khata_extra.in_advance') : t('khata.settled')}
                     </p>
                   </div>
                 </div>
@@ -155,12 +155,12 @@ export default function KhataDashboard() {
                   </ActionChip>
                   {balance > 0 && customer.phone && (
                     <ActionChip onClick={() => sendReminder(customer)} icon={MessageCircle} tone="success">
-                      Remind on WhatsApp
+                      {t('khata_extra.remind_whatsapp')}
                     </ActionChip>
                   )}
                   {balance <= 0 && (
                     <ActionChip onClick={() => removeCustomer(customer)} icon={Trash2}>
-                      Remove
+                      {t('khata_extra.remove')}
                     </ActionChip>
                   )}
                 </div>
