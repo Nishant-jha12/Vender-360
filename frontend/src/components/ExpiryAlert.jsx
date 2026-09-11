@@ -1,5 +1,6 @@
 import { AlertTriangle, ArrowRight, CheckCircle2, Clock, ShieldAlert } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useApi } from '../hooks/useApi';
 import { money, qty as fmtQty, shortDate } from '../lib/format';
 import { CardSkeleton } from './States';
@@ -11,6 +12,7 @@ import { CardSkeleton } from './States';
  * "Critical Expiry Warning" title above nothing when there is nothing expiring.
  */
 export default function ExpiryAlert({ compact = false }) {
+  const { t } = useTranslation();
   const { data, loading, error } = useApi('/inventory/expiring-soon', { params: { days: 7 } });
 
   if (loading) return <CardSkeleton rows={compact ? 1 : 2} />;
@@ -24,8 +26,8 @@ export default function ExpiryAlert({ compact = false }) {
       <div className="bg-brand-success/10 border border-brand-success/25 rounded-2xl p-4 flex items-center gap-3">
         <CheckCircle2 size={20} className="text-brand-success shrink-0" />
         <div>
-          <p className="text-sm font-bold text-brand-ink">Nothing expiring this week</p>
-          <p className="text-xs text-brand-muted mt-0.5">Your fresh stock is all in date.</p>
+          <p className="text-sm font-bold text-brand-ink">{t('expiry.nothing_expiring')}</p>
+          <p className="text-xs text-brand-muted mt-0.5">{t('expiry.fresh_in_date')}</p>
         </div>
       </div>
     );
@@ -43,15 +45,15 @@ export default function ExpiryAlert({ compact = false }) {
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-sm font-bold text-brand-danger">
-              {items.length} item{items.length === 1 ? '' : 's'} expiring this week
+              {items.length === 1 ? t('expiry.items_expiring', { count: items.length }) : t('expiry.items_expiring_plural', { count: items.length })}
             </p>
             <p className="text-xs text-brand-danger/90 mt-1 truncate">
               {items.slice(0, 3).map((i) => `${i.sku_name} (${i.days_left}d)`).join(', ')}
             </p>
             <div className="flex items-center justify-between mt-2 pt-2 border-t border-brand-danger/20 text-[11px] font-semibold text-brand-danger">
-              <span>At risk: {money(totalLossRisk)}</span>
+              <span>{t('expiry.at_risk', { amount: money(totalLossRisk) })}</span>
               <span className="flex items-center gap-1">
-                Review <ArrowRight size={12} />
+                {t('expiry.review')} <ArrowRight size={12} />
               </span>
             </div>
           </div>
@@ -68,14 +70,14 @@ export default function ExpiryAlert({ compact = false }) {
             <ShieldAlert size={22} />
           </div>
           <div>
-            <h3 className="font-bold text-base text-brand-ink">Expiring soon</h3>
+            <h3 className="font-bold text-base text-brand-ink">{t('expiry.expiring_soon')}</h3>
             <p className="text-xs text-brand-muted mt-0.5">
-              Clear these at a discount rather than write them off.
+              {t('expiry.clearance_hint')}
             </p>
           </div>
         </div>
         <div className="bg-brand-bg px-3 py-1.5 rounded-2xl border border-brand-border">
-          <p className="text-[10px] text-brand-muted uppercase font-bold tracking-wider">Stock at risk</p>
+          <p className="text-[10px] text-brand-muted uppercase font-bold tracking-wider">{t('expiry.stock_at_risk')}</p>
           <p className="text-base font-extrabold text-brand-danger font-inter">{money(totalLossRisk)}</p>
         </div>
       </div>
@@ -96,8 +98,8 @@ export default function ExpiryAlert({ compact = false }) {
                 <div className="min-w-0">
                   <h4 className="font-bold text-sm text-brand-ink leading-tight">{item.sku_name}</h4>
                   <p className="text-[11px] text-brand-muted mt-0.5">
-                    {fmtQty(item.qty_at_risk ?? item.current_qty)} {item.unit} at risk
-                    {item.batch_no && <> · batch {item.batch_no}</>}
+                    {t('expiry.qty_at_risk', { qty: `${fmtQty(item.qty_at_risk ?? item.current_qty)} ${item.unit}` })}
+                    {item.batch_no && <> · {t('expiry.batch')} {item.batch_no}</>}
                   </p>
                 </div>
                 <span
@@ -105,7 +107,7 @@ export default function ExpiryAlert({ compact = false }) {
                     isCritical ? 'bg-brand-danger text-white' : 'bg-brand-amber text-brand-ink'
                   }`}
                 >
-                  {item.days_left === 0 ? 'Today' : `${item.days_left}d left`}
+                  {item.days_left === 0 ? t('expiry.expired') : t('expiry.days_left', { days: item.days_left })}
                 </span>
               </div>
 
