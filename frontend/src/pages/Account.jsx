@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  Database, FileText, Globe, Hash, Loader2, LogOut, Package, Save, ShieldCheck, Smartphone,
-  Store, User,
+  Database, FileText, Globe, Hash, Loader2, LogOut, Moon, Package, Save, ShieldCheck, Smartphone,
+  Store, Sun, User,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { api, errorMessage } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
+import { useTheme } from '../context/ThemeContext';
 import { useToast } from '../components/Toast';
 import { CardSkeleton, ErrorState } from '../components/States';
 import { useApi } from '../hooks/useApi';
@@ -16,6 +17,7 @@ import { LANGUAGES } from '../i18n';
 export default function Account() {
   const { t, i18n } = useTranslation();
   const { logout, refreshVendor } = useAuth();
+  const { isDark, setTheme } = useTheme();
   const toast = useToast();
   const navigate = useNavigate();
 
@@ -202,6 +204,40 @@ export default function Account() {
             <option key={lang.code} value={lang.code}>{lang.label}</option>
           ))}
         </select>
+      </div>
+
+      {/* Theme Preference */}
+      <div className="bg-brand-surface rounded-2xl border border-brand-border shadow-sm p-4">
+        <h3 className="text-sm font-bold text-brand-ink flex items-center gap-2 mb-3">
+          {isDark ? <Moon size={16} className="text-brand-primary" /> : <Sun size={16} className="text-amber-500" />}
+          {t('theme.theme_label')}
+        </h3>
+        <div className="grid grid-cols-2 gap-2 bg-brand-bg p-1 rounded-xl border border-brand-border">
+          <button
+            type="button"
+            onClick={() => setTheme('light')}
+            className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+              !isDark
+                ? 'bg-brand-surface text-brand-ink shadow-sm border border-brand-border/60'
+                : 'text-brand-muted hover:text-brand-ink'
+            }`}
+          >
+            <Sun size={15} className="text-amber-500" />
+            <span>{t('theme.light')}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setTheme('dark')}
+            className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+              isDark
+                ? 'bg-brand-surface text-brand-primary shadow-sm border border-brand-border/60'
+                : 'text-brand-muted hover:text-brand-ink'
+            }`}
+          >
+            <Moon size={15} className="text-brand-primary" />
+            <span>{t('theme.dark')}</span>
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
