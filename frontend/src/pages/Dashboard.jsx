@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import {
-  BookUser, Mic, Package, Receipt, ScanLine, ShoppingCart, TrendingUp, Wallet,
+  BookUser, Mic, Moon, Package, Receipt, ScanLine, ShoppingCart, Sun, TrendingUp, Wallet,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -10,12 +10,14 @@ import { useApi } from '../hooks/useApi';
 import { useChartTheme } from '../hooks/useChartTheme';
 import { money, moneyWhole } from '../lib/format';
 import { useAuth } from '../context/AuthContext';
+import { useTheme } from '../context/ThemeContext';
 import ExpiryAlert from '../components/ExpiryAlert';
 import { EmptyState, ErrorState, StatSkeleton } from '../components/States';
 
 export default function Dashboard() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { storeName } = useAuth();
+  const { isDark, setTheme } = useTheme();
   const colors = useChartTheme();
 
   const trend = useApi('/analytics/sales-trend', { params: { days: 7 } });
@@ -25,13 +27,50 @@ export default function Dashboard() {
   const data = trend.data;
   const hasSales = data?.has_data;
 
+  const dateLocale = i18n.language === 'hi' ? 'hi-IN' : i18n.language === 'mr' ? 'mr-IN' : i18n.language === 'bn' ? 'bn-IN' : 'en-IN';
+
   return (
-    <div className="space-y-5 pb-6">
-      <div>
-        <h2 className="text-xl font-bold text-brand-ink font-inter">{storeName}</h2>
-        <p className="text-xs text-brand-muted mt-0.5">
-          {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}
-        </p>
+    <div className="space-y-4 sm:space-y-5 pb-6">
+      {/* Home Header with Store Greeting and Light/Dark Theme Switcher */}
+      <div className="flex items-center justify-between gap-3 bg-brand-surface border border-brand-border/60 p-3.5 rounded-2xl shadow-sm">
+        <div className="min-w-0 flex-1">
+          <h2 className="text-base sm:text-lg font-bold text-brand-ink font-inter truncate leading-tight">
+            {storeName}
+          </h2>
+          <p className="text-[11px] text-brand-muted mt-0.5 capitalize">
+            {new Date().toLocaleDateString(dateLocale, { weekday: 'short', day: 'numeric', month: 'short' })}
+          </p>
+        </div>
+
+        {/* Segmented Light / Dark Theme Switcher */}
+        <div className="flex items-center bg-brand-bg border border-brand-border/80 rounded-full p-1 shrink-0 shadow-inner">
+          <button
+            type="button"
+            onClick={() => setTheme('light')}
+            aria-label={t('theme.switch_to_light')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-all ${
+              !isDark
+                ? 'bg-brand-surface text-brand-amber shadow-sm border border-brand-border/40'
+                : 'text-brand-muted hover:text-brand-ink'
+            }`}
+          >
+            <Sun size={14} className={!isDark ? 'text-amber-500' : ''} />
+            <span className="text-[11px] font-bold">{t('theme.light')}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setTheme('dark')}
+            aria-label={t('theme.switch_to_dark')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold transition-all ${
+              isDark
+                ? 'bg-brand-surface text-brand-primary shadow-sm border border-brand-border/40'
+                : 'text-brand-muted hover:text-brand-ink'
+            }`}
+          >
+            <Moon size={14} className={isDark ? 'text-brand-primary' : ''} />
+            <span className="text-[11px] font-bold">{t('theme.dark')}</span>
+          </button>
+        </div>
       </div>
 
       {/* Primary action. Billing is the thing done fifty times a day. */}
@@ -45,8 +84,8 @@ export default function Dashboard() {
               <ShoppingCart size={24} />
             </div>
             <div>
-              <h3 className="font-extrabold text-lg font-inter">Start a bill</h3>
-              <p className="text-xs opacity-80">Cash, UPI or khata — recorded in seconds</p>
+              <h3 className="font-extrabold text-lg font-inter">{t('dashboard_extra.start_bill')}</h3>
+              <p className="text-xs opacity-80">{t('dashboard_extra.start_bill_sub')}</p>
             </div>
           </div>
           <TrendingUp size={22} className="opacity-60 shrink-0" />
@@ -62,17 +101,21 @@ export default function Dashboard() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
           <StatCard label={t('dashboard.sales_today')} value={money(data.today_sales)} />
           <StatCard
-            label="Today's profit"
+            label={t('dashboard_extra.profit_today')}
             value={money(data.today_profit)}
             accent="text-brand-success"
-            sub={data.today_sales > 0 ? `${data.margin_pct}% margin` : null}
+            sub={data.today_sales > 0 ? `${data.margin_pct}% ${t('dashboard_extra.margin')}` : null}
           />
-          <StatCard label="Bills today" value={String(data.today_bills)} sub={`${moneyWhole(data.week_sales)} this week`} />
+          <StatCard
+            label={t('dashboard_extra.bills_today')}
+            value={String(data.today_bills)}
+            sub={`${moneyWhole(data.week_sales)} ${t('dashboard_extra.this_week')}`}
+          />
           <StatCard
             label={t('dashboard.health_score')}
             value={health.data?.has_data ? `${health.data.health_score}/100` : '—'}
             accent="text-brand-amber"
-            sub={health.data?.has_data ? null : 'Needs 5 sales'}
+            sub={health.data?.has_data ? null : t('dashboard_extra.needs_sales')}
           />
         </div>
       )}
@@ -81,20 +124,20 @@ export default function Dashboard() {
         <div className="md:col-span-2 space-y-4 md:space-y-5">
           {/* 7-day trend */}
           <section className="bg-brand-surface rounded-2xl p-4 md:p-6 shadow-sm border border-brand-border">
-            <h3 className="text-sm md:text-base font-semibold text-brand-ink mb-4">Last 7 days</h3>
+            <h3 className="text-sm md:text-base font-semibold text-brand-ink mb-4">{t('dashboard_extra.last_7_days')}</h3>
             {trend.loading ? (
               <div className="h-48 md:h-64 animate-pulse bg-brand-border/40 rounded-xl" />
             ) : !hasSales ? (
               <EmptyState
                 icon={Receipt}
-                title="No sales recorded yet"
-                description="Once you bill your first customer, your revenue and profit will appear here. Nothing on this dashboard is estimated — it is all read from your own bills."
+                title={t('dashboard_extra.no_sales_title')}
+                description={t('dashboard_extra.no_sales_desc')}
                 action={
                   <Link
                     to="/app/billing"
                     className="inline-block bg-brand-primary text-brand-on-primary text-xs font-bold px-5 py-2.5 rounded-2xl"
                   >
-                    Create your first bill
+                    {t('dashboard_extra.create_first_bill')}
                   </Link>
                 }
               />
@@ -139,21 +182,21 @@ export default function Dashboard() {
             <section className="bg-brand-surface rounded-2xl p-4 md:p-5 shadow-sm border border-brand-border">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm md:text-base font-semibold text-brand-ink flex items-center gap-2">
-                  <Wallet size={16} className="text-brand-muted" /> Today's close
+                  <Wallet size={16} className="text-brand-muted" /> {t('dashboard_extra.today_close')}
                 </h3>
                 <span className="text-[11px] text-brand-muted font-semibold">
-                  {dayClose.data.bill_count} bills · avg {money(dayClose.data.average_bill)}
+                  {t('dashboard_extra.bills_count', { count: dayClose.data.bill_count })} · {t('dashboard_extra.avg_bill', { avg: money(dayClose.data.average_bill) })}
                 </span>
               </div>
               <div className="grid grid-cols-3 gap-2.5">
-                <ModeCard label="Cash" value={dayClose.data.by_payment_mode.cash} accent="text-brand-success" />
-                <ModeCard label="UPI" value={dayClose.data.by_payment_mode.upi} accent="text-brand-primary" />
-                <ModeCard label="On khata" value={dayClose.data.by_payment_mode.khata} accent="text-brand-danger" />
+                <ModeCard label={t('dashboard_extra.cash')} value={dayClose.data.by_payment_mode.cash} accent="text-brand-success" />
+                <ModeCard label={t('dashboard_extra.upi')} value={dayClose.data.by_payment_mode.upi} accent="text-brand-primary" />
+                <ModeCard label={t('dashboard_extra.on_khata')} value={dayClose.data.by_payment_mode.khata} accent="text-brand-danger" />
               </div>
               {dayClose.data.top_items?.length > 0 && (
                 <div className="mt-4 pt-3 border-t border-brand-border">
                   <p className="text-[11px] font-bold uppercase tracking-wider text-brand-muted mb-2">
-                    Best sellers today
+                    {t('dashboard_extra.best_sellers')}
                   </p>
                   <ul className="space-y-1.5">
                     {dayClose.data.top_items.slice(0, 3).map((item) => (
@@ -184,7 +227,7 @@ export default function Dashboard() {
 
         <div className="space-y-4 md:space-y-5">
           <div>
-            <h3 className="text-sm md:text-base font-semibold text-brand-ink mb-3">Stock watch</h3>
+            <h3 className="text-sm md:text-base font-semibold text-brand-ink mb-3">{t('dashboard_extra.stock_watch')}</h3>
             <ExpiryAlert compact />
           </div>
         </div>
