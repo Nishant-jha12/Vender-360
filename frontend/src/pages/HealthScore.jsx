@@ -1,15 +1,9 @@
 import { Link } from 'react-router-dom';
 import { Info, ShieldCheck } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { useApi } from '../hooks/useApi';
 import { money } from '../lib/format';
 import { CardSkeleton, EmptyState, ErrorState } from '../components/States';
-
-const LABELS = {
-  sales_consistency: 'Sales consistency',
-  inventory_turnover: 'Inventory turnover',
-  waste_control: 'Waste control',
-  on_time_restocking: 'Stock availability',
-};
 
 /**
  * A score computed from the shop's own behaviour, with every input on screen.
@@ -17,7 +11,15 @@ const LABELS = {
  * number that someone could have made a real decision on.
  */
 export default function HealthScore() {
+  const { t } = useTranslation();
   const { data, loading, error, reload } = useApi('/analytics/health-score');
+
+  const LABELS = {
+    sales_consistency: t('score_extra.sales_consistency'),
+    inventory_turnover: t('score_extra.inventory_turnover'),
+    waste_control: t('score_extra.waste_control'),
+    on_time_restocking: t('score_extra.on_time_restocking'),
+  };
 
   if (loading) return <CardSkeleton rows={3} />;
   if (error) return <ErrorState message={error} onRetry={reload} />;
@@ -26,11 +28,11 @@ export default function HealthScore() {
     return (
       <EmptyState
         icon={ShieldCheck}
-        title="Your score is not ready yet"
-        description={data?.message || 'Record a few sales and the score will appear here.'}
+        title={t('score_extra.not_ready')}
+        description={data?.message || t('score_extra.not_ready')}
         action={
           <Link to="/app/billing" className="inline-block bg-brand-primary text-brand-on-primary text-xs font-bold px-5 py-2.5 rounded-2xl">
-            Record a sale
+            {t('forecast_extra.record_sale')}
           </Link>
         }
       />
@@ -38,7 +40,7 @@ export default function HealthScore() {
   }
 
   const { breakdown, weights, health_score: score } = data;
-  const band = score >= 75 ? 'Strong' : score >= 50 ? 'Steady' : 'Needs attention';
+  const band = score >= 75 ? t('score_extra.strong') : score >= 50 ? t('score_extra.steady') : t('score_extra.needs_attention');
 
   return (
     <div className="space-y-5 pb-6">
@@ -46,13 +48,13 @@ export default function HealthScore() {
         <div className="absolute top-0 right-0 p-4 opacity-20" aria-hidden="true">
           <ShieldCheck size={100} />
         </div>
-        <h2 className="text-sm font-semibold opacity-90 relative z-10">Store health score</h2>
+        <h2 className="text-sm font-semibold opacity-90 relative z-10">{t('score_extra.title')}</h2>
         <p className="text-[11px] opacity-75 relative z-10 mb-4">
-          From {data.sales_recorded} sales across {data.days_of_history} trading days
+          {t('score_extra.sales_trading_days', { sales: data.sales_recorded, days: data.days_of_history })}
         </p>
         <div className="w-32 h-32 mx-auto rounded-full border-8 border-white/20 flex flex-col items-center justify-center relative z-10 bg-brand-primary-dark/30">
           <span className="text-4xl font-bold font-inter">{score}</span>
-          <span className="text-[10px] opacity-80 uppercase tracking-widest mt-1">out of 100</span>
+          <span className="text-[10px] opacity-80 uppercase tracking-widest mt-1">{t('score_extra.out_of_100')}</span>
         </div>
         <div className="mt-5 inline-block bg-white/20 px-4 py-1.5 rounded-full text-xs font-semibold relative z-10">
           {band}
