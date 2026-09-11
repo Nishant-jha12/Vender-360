@@ -1,9 +1,11 @@
 import { Activity, Bell } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { useApi } from '../hooks/useApi';
 import { relativeTime } from '../lib/format';
 import { CardSkeleton, EmptyState, ErrorState } from '../components/States';
 
 export default function Notifications() {
+  const { t } = useTranslation();
   const { data, loading, error, reload } = useApi('/analytics/activities', { params: { limit: 30 } });
 
   return (
@@ -11,8 +13,8 @@ export default function Notifications() {
       <div className="flex items-center gap-2.5">
         <Bell className="text-brand-primary" size={22} />
         <div>
-          <h2 className="text-xl font-bold text-brand-ink font-inter">Activity</h2>
-          <p className="text-xs text-brand-muted">Everything that happened in your store</p>
+          <h2 className="text-xl font-bold text-brand-ink font-inter">{t('notifications_extra.title')}</h2>
+          <p className="text-xs text-brand-muted">{t('notifications_extra.subtitle')}</p>
         </div>
       </div>
 
@@ -23,8 +25,8 @@ export default function Notifications() {
       ) : !data?.length ? (
         <EmptyState
           icon={Activity}
-          title="Nothing has happened yet"
-          description="Sales, stock changes and khata entries will all show up here as you use the app."
+          title={t('notifications_extra.empty_title')}
+          description={t('notifications_extra.empty_desc')}
         />
       ) : (
         <ul className="space-y-3">
