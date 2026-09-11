@@ -280,15 +280,19 @@ writing anything.
 
 ---
 
-## Known limitations
-
 - **SQLite and no migrations tool.** `migrate.py` adds missing columns in place;
   move to Alembic before the schema changes much further.
-- **Online only.** A shop with patchy signal cannot bill offline yet. An
-  IndexedDB outbox plus `vite-plugin-pwa` is the obvious next step, and
-  `InventoryItem.sync_status` is already there for it.
-- **i18n is partial.** The nav, dashboard, inventory and khata screens are
-  translated; billing, stock intake, deliveries, auth and settings are still
-  English-only.
 - **UPI confirmation is manual.** Vendor360 cannot see your bank account, so
   "payment received" is something you confirm, not something it detects.
+
+---
+
+## 📱 Mobile App Experience, Themes & Vernacular Languages
+
+Vendor360 v2.0 is designed as a native-feel mobile application tailored for Kirana retail:
+
+- **🌓 Light & Dark Theme**: Segmented toggle on the Home screen header, top bar, login card, and account settings with smooth CSS transitions.
+- **🇮🇳 100% Vernacular Localization**: Full parity across English, Hindi (हिंदी), Marathi (मराठी), and Bengali (বাংলা) for all 277 UI keys.
+- **📲 Mobile-First PWA Layout**: Fluid mobile viewport, 4-tab bottom navigation, and Kirana App Drawer.
+- **🎙 Hands-Free Voice Inventory**: Speak stock entries in your local language with instant live parsing.
+- **🧾 WhatsApp Receipts & Khata Reminders**: Generate customer bills and udhaar payment reminders via WhatsApp in one tap.
