@@ -4,7 +4,7 @@ import axios from 'axios';
 // http://127.0.0.1:8000 in 21 separate files, which meant the app could never
 // run anywhere but the machine that built it.
 export const API_BASE_URL =
-  import.meta.env.VITE_API_URL?.replace(/\/$/, '') || 'http://127.0.0.1:8000/api';
+  import.meta.env.VITE_API_URL?.replace(/\/$/, '') || `http://${window.location.hostname}:8000/api`;
 
 const AUTH_KEY = 'vendor_auth';
 
