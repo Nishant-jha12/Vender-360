@@ -23,6 +23,9 @@ dist-ssr/
 # Editor / OS
 .vscode/
 .idea/
+.claude/
+.claude
+CLAUDE.md
 .DS_Store
 Thumbs.db
 
