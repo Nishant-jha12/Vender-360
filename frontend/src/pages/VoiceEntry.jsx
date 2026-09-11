@@ -18,7 +18,7 @@ const LANG_MAP = { en: 'en-IN', hi: 'hi-IN', mr: 'mr-IN', bn: 'bn-IN' };
  * until the shopkeeper confirms what was understood.
  */
 export default function VoiceEntry() {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   const toast = useToast();
 
   const [status, setStatus] = useState('idle'); // idle | listening | interpreting | confirming | saving
@@ -119,11 +119,7 @@ export default function VoiceEntry() {
     return (
       <div className="max-w-md mx-auto text-center py-16 px-4">
         <Mic className="mx-auto text-brand-muted mb-4 opacity-40" size={44} />
-        <h2 className="text-lg font-bold text-brand-ink">Voice logging needs Chrome</h2>
-        <p className="text-sm text-brand-muted mt-2 leading-relaxed">
-          Your browser does not support speech recognition. Chrome on Android or
-          desktop works. You can still adjust stock by hand from the Stock page.
-        </p>
+        <h2 className="text-lg font-bold text-brand-ink">{t('voice_extra.not_supported')}</h2>
       </div>
     );
   }
@@ -131,13 +127,13 @@ export default function VoiceEntry() {
   return (
     <div className="flex flex-col items-center pt-6 pb-24 px-4 max-w-md mx-auto">
       <div className="text-center mb-8">
-        <h2 className="text-xl font-bold text-brand-ink font-inter">Voice logging</h2>
+        <h2 className="text-xl font-bold text-brand-ink font-inter">{t('voice_extra.title')}</h2>
         <p className="text-sm text-brand-muted mt-2">
-          {status === 'idle' && 'Tap the mic and say what changed, e.g. "20 milk aaya" or "sold 5 bread".'}
-          {listening && 'Listening...'}
-          {status === 'interpreting' && 'Working out what you meant...'}
-          {status === 'confirming' && 'Check this before saving.'}
-          {status === 'saving' && 'Saving...'}
+          {status === 'idle' && t('voice_extra.tap_mic_hint')}
+          {listening && t('voice_extra.listening')}
+          {status === 'interpreting' && t('voice_extra.interpreting')}
+          {status === 'confirming' && t('voice_extra.confirming')}
+          {status === 'saving' && t('voice_extra.saving')}
         </p>
       </div>
 
@@ -171,9 +167,9 @@ export default function VoiceEntry() {
           {interpretation.understood ? (
             <>
               <p className="text-sm font-bold text-brand-ink text-center">
-                {interpretation.direction < 0 ? 'Remove' : 'Add'}{' '}
+                {interpretation.direction < 0 ? t('voice_extra.remove_direction') : t('voice_extra.add_direction')}{' '}
                 <span className="text-brand-primary">{fmtQty(interpretation.qty)}</span>
-                {interpretation.direction < 0 ? ' from ' : ' to '}
+                {interpretation.direction < 0 ? ` ${t('voice_extra.from')} ` : ` ${t('voice_extra.to')} `}
                 <span className="text-brand-primary">{interpretation.sku_name}</span>
               </p>
               <p className="text-[11px] text-brand-muted text-center mt-1.5">
