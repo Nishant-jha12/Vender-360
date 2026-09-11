@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { Package, TrendingDown, TrendingUp } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { useApi } from '../hooks/useApi';
 import { money } from '../lib/format';
 import { CardSkeleton, EmptyState, ErrorState } from '../components/States';
@@ -12,6 +13,7 @@ import { CardSkeleton, EmptyState, ErrorState } from '../components/States';
  * a wrong prediction on day one costs the user's trust in every other number.
  */
 export default function Forecast() {
+  const { t } = useTranslation();
   const { data, loading, error, reload } = useApi('/analytics/forecast');
   const reorder = useApi('/analytics/reorder-list');
 
@@ -21,20 +23,20 @@ export default function Forecast() {
   return (
     <div className="space-y-5 pb-6">
       <div>
-        <h2 className="text-xl font-bold text-brand-ink font-inter">Demand forecast</h2>
+        <h2 className="text-xl font-bold text-brand-ink font-inter">{t('forecast_extra.title')}</h2>
         <p className="text-xs text-brand-muted mt-0.5">
-          {data?.has_data ? data.method : 'Based on your own sales history'}
+          {data?.has_data ? data.method : t('forecast_extra.subtitle')}
         </p>
       </div>
 
       {!data?.has_data ? (
         <EmptyState
           icon={TrendingUp}
-          title="Not enough history yet"
+          title={t('forecast_extra.not_enough_history')}
           description={data?.message}
           action={
             <Link to="/app/billing" className="inline-block bg-brand-primary text-brand-on-primary text-xs font-bold px-5 py-2.5 rounded-2xl">
-              Record a sale
+              {t('forecast_extra.record_sale')}
             </Link>
           }
         />
@@ -42,10 +44,10 @@ export default function Forecast() {
         <>
           <div className="bg-brand-primary/10 border border-brand-primary/25 rounded-2xl px-4 py-3">
             <p className="text-sm font-bold text-brand-primary">
-              Expected for {data.forecast_for}
+              {t('forecast_extra.expected_for', { date: data.forecast_for })}
             </p>
             <p className="text-xs text-brand-primary/80 mt-0.5">
-              Compared against your {data.days_of_history}-day average
+              {t('forecast_extra.compared_average', { days: data.days_of_history })}
             </p>
           </div>
 
