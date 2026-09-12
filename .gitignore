@@ -20,12 +20,13 @@ dist-ssr/
 .env.local
 .env.*.local
 
-# Editor / OS
+# Editor / IDE / AI configurations
 .vscode/
 .idea/
 .claude/
-.claude
+.claude*
 CLAUDE.md
+*.claude*
 .DS_Store
 Thumbs.db
 
