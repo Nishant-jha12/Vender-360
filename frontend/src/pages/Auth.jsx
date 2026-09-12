@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Eye, EyeOff, Loader2, Lock, Moon, Sun } from 'lucide-react';
+import { ArrowLeft, Eye, EyeOff, Loader2, Moon, Sun } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { LANGUAGES } from '../i18n';
 import { api, errorMessage } from '../lib/api';

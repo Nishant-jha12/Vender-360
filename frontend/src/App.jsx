@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft, Bell, BookOpen, ChevronRight, Globe, Grid, HeartPulse, Home,
+  ArrowLeft, Bell, BookOpen, Globe, Grid, HeartPulse, Home,
   Loader2, Map as MapIcon, Mic, Moon, Package, ScanLine, ShieldCheck,
-  ShoppingCart, Store, Sun, TrendingUp, Truck, User, X,
+  ShoppingCart, Sun, TrendingUp, Truck, User, X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import './i18n';
