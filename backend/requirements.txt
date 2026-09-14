@@ -21,7 +21,7 @@ pillow>=10.4                   # tested: 11.3.0
 
 # Postgres driver. SQLite is the default and needs nothing; this is here so
 # DATABASE_URL=postgresql+psycopg://... works without a second install step.
-psycopg[binary]>=3.2,<4        # tested: 3.2.3
+psycopg[binary]>=3.3.5,<4        # tested: 3.2.3
 
 # Tests
 pytest>=8.0                    # tested: 9.1.1
