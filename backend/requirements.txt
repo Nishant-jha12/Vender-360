@@ -24,7 +24,7 @@ pillow>=10.4                   # tested: 11.3.0
 psycopg[binary]>=3.2,<4        # tested: 3.2.3
 
 # Tests
-pytest>=8.0                    # tested: 9.1.1
+pytest>=9.1.1                    # tested: 9.1.1
 httpx>=0.27                    # tested: 0.28.1
 
 # Auth deliberately uses the standard library (PBKDF2-HMAC-SHA256 for passwords,
