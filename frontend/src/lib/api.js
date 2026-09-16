@@ -83,3 +83,11 @@ export function errorMessage(error, fallback = 'Something went wrong. Please try
   }
   return fallback;
 }
+
+export function isNetworkError(error) {
+  if (!navigator.onLine) return true;
+  if (error?.code === 'ERR_NETWORK' || error?.message === 'Network Error') return true;
+  if (error?.code === 'ECONNABORTED') return true;
+  if (!error?.response && error?.request) return true;
+  return false;
+}

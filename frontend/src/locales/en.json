@@ -52,7 +52,12 @@
     "no_khata_customers": "No khata customers yet. Add one from the Khata page first.",
     "items_count": "{{count}} item",
     "items_count_plural": "{{count}} items",
-    "your_products": "Your products"
+    "your_products": "Your products",
+    "offline_badge": "Offline Bill",
+    "queued_for_sync": "Queued for cloud sync",
+    "offline_saved": "Bill of {{amount}} saved locally on device",
+    "saved_offline_fallback": "Connection dropped. Bill saved offline safely and queued for sync!",
+    "offline_save_failed": "Could not save offline bill. Please try again."
   },
   "scan": {
     "title": "Stock intake",
@@ -327,5 +332,30 @@
     "theme_label": "Theme",
     "switch_to_light": "Switch to Light Mode",
     "switch_to_dark": "Switch to Dark Mode"
+  },
+  "sync": {
+    "online": "Online",
+    "offline": "Offline",
+    "syncing": "Syncing...",
+    "sync_now": "Sync Now",
+    "synced_success": "All {{count}} offline sales synced!",
+    "already_synced": "All pending bills were already synchronized.",
+    "no_pending": "All sales are up to date.",
+    "sync_failed": "Sync failed. Will retry automatically.",
+    "sync_center": "Sync Center",
+    "online_ready": "Cloud connection active · Real-time backup",
+    "offline_mode": "Offline mode · Bills saved securely on device",
+    "network_connected": "Connected to Cloud",
+    "network_disconnected": "No Internet Connection",
+    "last_synced": "Last synced",
+    "never_synced": "Not synced yet",
+    "pending_bills": "Pending Bills ({{count}})",
+    "waiting_upload": "waiting for cloud sync",
+    "all_synced_title": "Everything is in sync!",
+    "all_synced_desc": "All sales made on this device have been safely recorded in your cloud database.",
+    "kirana_tip_title": "Kirana Offline Mode",
+    "kirana_tip_body": "You can continue billing customers even with zero internet or Wi-Fi. All bills will automatically sync once connection is restored.",
+    "online_status": "Online status: Connected",
+    "offline_status": "Offline status: Working locally"
   }
 }

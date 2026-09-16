@@ -35,6 +35,7 @@ COLUMNS = [
     ("inventory_items", "gst_rate", "FLOAT DEFAULT 0"),
     ("stock_intake_lines", "cost_price_before", "FLOAT"),
     ("stock_intake_lines", "expiry_date_before", "DATETIME"),
+    ("sales", "offline_id", "VARCHAR"),
 ]
 
 

@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BookUser, Check, IndianRupee, Loader2, Minus, Package, Plus, QrCode,
+  BookUser, Check, CloudOff, IndianRupee, Loader2, Minus, Package, Plus, QrCode,
   Search, ShoppingCart, Trash2, X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { api, errorMessage } from '../lib/api';
+import { api, errorMessage, isNetworkError } from '../lib/api';
+import * as offlineDb from '../lib/offlineDb';
 import { money, qty as fmtQty } from '../lib/format';
 import { useToast } from '../components/Toast';
 import { useAuth } from '../context/AuthContext';
+import { useSync } from '../context/SyncContext';
 import { CardSkeleton, EmptyState, ErrorState } from '../components/States';
 import CheckoutModal from '../components/CheckoutModal';
 
@@ -26,6 +28,7 @@ export default function Billing() {
   const { t } = useTranslation();
   const toast = useToast();
   const { vendor } = useAuth();
+  const { isOnline, refreshPending, openSyncCenter } = useSync();
 
   const [frequent, setFrequent] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -52,19 +55,46 @@ export default function Billing() {
     try {
       const res = await api.get('/inventory/frequent', { params: { limit: 12 } });
       setFrequent(res.data);
+      offlineDb.cacheFrequent(res.data).catch(() => {});
     } catch (err) {
-      if (err?.response?.status !== 401) setLoadError(errorMessage(err));
+      // Offline fallback
+      const cached = await offlineDb.getCachedFrequent();
+      if (cached && cached.length > 0) {
+        setFrequent(cached);
+      } else if (err?.response?.status !== 401 && !isNetworkError(err)) {
+        setLoadError(errorMessage(err));
+      }
     } finally {
       setLoading(false);
     }
   };
 
+  const loadCustomers = async () => {
+    try {
+      const res = await api.get('/customers');
+      setCustomers(res.data);
+      offlineDb.cacheCustomers(res.data).catch(() => {});
+    } catch {
+      const cached = await offlineDb.getCachedCustomers();
+      if (cached && cached.length > 0) {
+        setCustomers(cached);
+      }
+    }
+  };
+
   useEffect(() => {
     loadFrequent();
-    api.get('/customers').then((res) => setCustomers(res.data)).catch(() => {});
+    loadCustomers();
+
+    const onSynced = () => {
+      loadFrequent();
+      loadCustomers();
+    };
+    window.addEventListener('vendor360:synced', onSynced);
+    return () => window.removeEventListener('vendor360:synced', onSynced);
   }, []);
 
-  // Debounced search so every keystroke isn't a round trip.
+  // Debounced search with offline fallback
   useEffect(() => {
     const term = search.trim();
     if (term.length < 2) {
@@ -73,14 +103,30 @@ export default function Billing() {
     }
     setSearching(true);
     const timer = setTimeout(() => {
-      api
-        .get('/inventory', { params: { search: term, limit: 20 } })
-        .then((res) => setResults(res.data))
-        .catch(() => setResults([]))
-        .finally(() => setSearching(false));
+      if (!isOnline) {
+        offlineDb
+          .getCachedProducts(term)
+          .then((res) => setResults(res))
+          .catch(() => setResults([]))
+          .finally(() => setSearching(false));
+      } else {
+        api
+          .get('/inventory', { params: { search: term, limit: 20 } })
+          .then((res) => {
+            setResults(res.data);
+            offlineDb.cacheProducts(res.data).catch(() => {});
+          })
+          .catch(() => {
+            offlineDb
+              .getCachedProducts(term)
+              .then((res) => setResults(res))
+              .catch(() => setResults([]));
+          })
+          .finally(() => setSearching(false));
+      }
     }, 250);
     return () => clearTimeout(timer);
-  }, [search]);
+  }, [search, isOnline]);
 
   const total = useMemo(
     () => cart.reduce((sum, line) => sum + line.qty * line.unit_price, 0),
@@ -136,15 +182,67 @@ export default function Billing() {
   const submitSale = async (paymentMode, customerId = null) => {
     if (!cart.length) return;
     setSubmitting(true);
+
+    const saleItems = cart.map((line) => ({
+      item_id: line.item_id,
+      sku_name: line.sku_name,
+      qty: line.qty,
+      unit_price: line.unit_price,
+    }));
+
+    const selectedCust = customerId ? customers.find((c) => c.id === customerId) : null;
+
+    // Fast-path: If currently offline, save directly to IndexedDB outbox
+    if (!isOnline) {
+      try {
+        const offlineSale = await offlineDb.saveOfflineSale({
+          payment_mode: paymentMode,
+          customer_id: customerId,
+          customer_name: selectedCust?.name,
+          items: saleItems,
+          note: null,
+        });
+
+        setLastSale(offlineSale);
+        setCart([]);
+        setCartOpenOnMobile(false);
+        setShowKhataPicker(false);
+        setShowUpi(false);
+        toast.success(t('billing.offline_saved', { amount: money(offlineSale.total_amount) }));
+        await refreshPending();
+
+        // Local UI state updates for immediate reactivity
+        setFrequent((prev) =>
+          prev.map((it) => {
+            const sold = saleItems.find((l) => l.item_id === it.id);
+            if (!sold) return it;
+            return { ...it, current_qty: Math.max(0, (it.current_qty || 0) - sold.qty) };
+          })
+        );
+
+        if (customerId) {
+          setCustomers((prev) =>
+            prev.map((c) =>
+              c.id === customerId
+                ? { ...c, total_credit_balance: (c.total_credit_balance || 0) + offlineSale.total_amount }
+                : c
+            )
+          );
+        }
+      } catch {
+        toast.error(t('billing.offline_save_failed'));
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
+    // Online submission attempt
     try {
       const res = await api.post('/sales', {
         payment_mode: paymentMode,
         customer_id: customerId,
-        items: cart.map((line) => ({
-          item_id: line.item_id,
-          qty: line.qty,
-          unit_price: line.unit_price,
-        })),
+        items: saleItems,
       });
 
       setLastSale(res.data.sale);
@@ -154,16 +252,45 @@ export default function Billing() {
       setShowUpi(false);
       toast.success(`${money(res.data.sale.total_amount)} recorded`);
 
-      // Surface a stock count that disagrees with what was just sold, rather
-      // than silently correcting it.
       (res.data.stock_warnings || []).forEach((warning) => toast.warning(warning, 8000));
 
       loadFrequent();
       if (customerId) {
-        api.get('/customers').then((r) => setCustomers(r.data)).catch(() => {});
+        loadCustomers();
       }
     } catch (err) {
-      toast.error(errorMessage(err, 'Could not record the sale'));
+      // If network connection dropped during checkout, preserve the bill offline
+      if (isNetworkError(err)) {
+        try {
+          const offlineSale = await offlineDb.saveOfflineSale({
+            payment_mode: paymentMode,
+            customer_id: customerId,
+            customer_name: selectedCust?.name,
+            items: saleItems,
+            note: null,
+          });
+
+          setLastSale(offlineSale);
+          setCart([]);
+          setCartOpenOnMobile(false);
+          setShowKhataPicker(false);
+          setShowUpi(false);
+          toast.warning(t('billing.saved_offline_fallback'));
+          await refreshPending();
+
+          setFrequent((prev) =>
+            prev.map((it) => {
+              const sold = saleItems.find((l) => l.item_id === it.id);
+              if (!sold) return it;
+              return { ...it, current_qty: Math.max(0, (it.current_qty || 0) - sold.qty) };
+            })
+          );
+        } catch {
+          toast.error(errorMessage(err, 'Could not record the sale'));
+        }
+      } else {
+        toast.error(errorMessage(err, 'Could not record the sale'));
+      }
     } finally {
       setSubmitting(false);
     }
@@ -261,29 +388,59 @@ export default function Billing() {
           )}
 
           {lastSale && cart.length === 0 && (
-            <div className="bg-brand-success/10 border border-brand-success/30 rounded-2xl p-4 flex items-center gap-3">
-              <Check size={20} className="text-brand-success shrink-0" />
-              <div className="flex-1">
-                <p className="text-sm font-bold text-brand-ink">
-                  Last bill: {money(lastSale.total_amount)} ({lastSale.payment_mode})
+            <div
+              className={`border rounded-2xl p-4 flex items-center gap-3 transition-colors ${
+                lastSale.is_offline
+                  ? 'bg-amber-500/10 border-amber-500/30'
+                  : 'bg-brand-success/10 border-brand-success/30'
+              }`}
+            >
+              {lastSale.is_offline ? (
+                <CloudOff size={20} className="text-amber-600 dark:text-amber-400 shrink-0" />
+              ) : (
+                <Check size={20} className="text-brand-success shrink-0" />
+              )}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <p className="text-sm font-bold text-brand-ink">
+                    Last bill: {money(lastSale.total_amount)} ({lastSale.payment_mode})
+                  </p>
+                  {lastSale.is_offline && (
+                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 uppercase tracking-wider">
+                      {t('billing.offline_badge')}
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-brand-muted truncate">
+                  {lastSale.line_items?.length || 0} item(s) recorded
+                  {lastSale.is_offline && ` · ${t('billing.queued_for_sync')}`}
                 </p>
-                <p className="text-[11px] text-brand-muted">{lastSale.line_items?.length || 0} item(s) recorded</p>
               </div>
-              <button
-                onClick={async () => {
-                  try {
-                    await api.delete(`/sales/${lastSale.id}`);
-                    toast.info('Bill cancelled and stock restored');
-                    setLastSale(null);
-                    loadFrequent();
-                  } catch (err) {
-                    toast.error(errorMessage(err));
-                  }
-                }}
-                className="text-[11px] font-bold text-brand-danger hover:underline shrink-0 focus-visible:ring-2 focus-visible:ring-brand-danger outline-none rounded px-1"
-              >
-                Undo
-              </button>
+
+              {lastSale.is_offline ? (
+                <button
+                  onClick={openSyncCenter}
+                  className="text-[11px] font-bold text-brand-primary hover:underline shrink-0 focus-visible:ring-2 focus-visible:ring-brand-primary outline-none rounded px-1"
+                >
+                  {t('sync.sync_center')}
+                </button>
+              ) : (
+                <button
+                  onClick={async () => {
+                    try {
+                      await api.delete(`/sales/${lastSale.id}`);
+                      toast.info('Bill cancelled and stock restored');
+                      setLastSale(null);
+                      loadFrequent();
+                    } catch (err) {
+                      toast.error(errorMessage(err));
+                    }
+                  }}
+                  className="text-[11px] font-bold text-brand-danger hover:underline shrink-0 focus-visible:ring-2 focus-visible:ring-brand-danger outline-none rounded px-1"
+                >
+                  Undo
+                </button>
+              )}
             </div>
           )}
         </div>

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft, Bell, BookOpen, Globe, Grid, HeartPulse, Home,
+  ArrowLeft, Bell, BookOpen, Cloud, CloudOff, Globe, Grid, HeartPulse, Home,
   Loader2, Map as MapIcon, Mic, Moon, Package, ScanLine, ShieldCheck,
   ShoppingCart, Sun, TrendingUp, Truck, User, X,
 } from 'lucide-react';
@@ -11,8 +11,10 @@ import { LANGUAGES } from './i18n';
 
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
+import { SyncProvider, useSync } from './context/SyncContext';
 import { ToastProvider } from './components/Toast';
 import { useApi } from './hooks/useApi';
+import SyncCenterModal from './components/SyncCenterModal';
 
 import Legal from './pages/Legal';
 import Auth from './pages/Auth';
@@ -56,6 +58,7 @@ function AppLayout() {
   const { t, i18n } = useTranslation();
   const { isDark, toggle } = useTheme();
   const { displayName, storeName } = useAuth();
+  const { isOnline, isSyncing, pendingCount, openSyncCenter } = useSync();
   const [moreOpen, setMoreOpen] = useState(false);
   const [langMenuOpen, setLangMenuOpen] = useState(false);
 
@@ -163,6 +166,48 @@ function AppLayout() {
 
           {/* Right: Quick Action Controls */}
           <div className="flex items-center gap-1 shrink-0">
+            {/* Online / Offline / Sync Status Badge */}
+            <button
+              onClick={openSyncCenter}
+              aria-label={isOnline ? t('sync.online_status') : t('sync.offline_status')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-bold rounded-full transition-all border outline-none active:scale-95 focus-visible:ring-2 focus-visible:ring-brand-primary ${
+                !isOnline
+                  ? 'bg-amber-500/15 border-amber-500/40 text-amber-700 dark:text-amber-300'
+                  : isSyncing
+                  ? 'bg-blue-500/15 border-blue-500/40 text-blue-700 dark:text-blue-300'
+                  : pendingCount > 0
+                  ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-300'
+                  : 'bg-brand-bg hover:bg-brand-border/40 text-brand-ink border-brand-border/60'
+              }`}
+            >
+              {!isOnline ? (
+                <>
+                  <CloudOff size={13} className="text-amber-600 dark:text-amber-400" />
+                  <span>{t('sync.offline')}</span>
+                  {pendingCount > 0 && (
+                    <span className="w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] flex items-center justify-center font-extrabold">
+                      {pendingCount}
+                    </span>
+                  )}
+                </>
+              ) : isSyncing ? (
+                <>
+                  <Loader2 size={13} className="animate-spin text-blue-600 dark:text-blue-400" />
+                  <span>{t('sync.syncing')}</span>
+                </>
+              ) : pendingCount > 0 ? (
+                <>
+                  <Cloud size={13} className="text-emerald-600 dark:text-emerald-400" />
+                  <span>{pendingCount}</span>
+                </>
+              ) : (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                  <span>{t('sync.online')}</span>
+                </>
+              )}
+            </button>
+
             {/* Quick Vernacular Language Selector */}
             <div className="relative">
               <button
@@ -372,6 +417,9 @@ function AppLayout() {
           </div>
         )}
 
+        {/* Dedicated Sync Center Modal */}
+        <SyncCenterModal />
+
       </div>
     </div>
   );
@@ -382,22 +430,24 @@ export default function App() {
     <ToastProvider>
       <ThemeProvider>
         <AuthProvider>
-          <Routes>
-            {/* Direct App Entry - No Marketing Website! */}
-            <Route path="/" element={<Navigate to="/app" replace />} />
-            <Route path="/auth" element={<Auth />} />
-            <Route path="/legal" element={<Legal />} />
-            <Route
-              path="/app/*"
-              element={
-                <ProtectedRoute>
-                  <AppLayout />
-                </ProtectedRoute>
-              }
-            />
-            {/* Catch-all sends to /app */}
-            <Route path="*" element={<Navigate to="/app" replace />} />
-          </Routes>
+          <SyncProvider>
+            <Routes>
+              {/* Direct App Entry - No Marketing Website! */}
+              <Route path="/" element={<Navigate to="/app" replace />} />
+              <Route path="/auth" element={<Auth />} />
+              <Route path="/legal" element={<Legal />} />
+              <Route
+                path="/app/*"
+                element={
+                  <ProtectedRoute>
+                    <AppLayout />
+                  </ProtectedRoute>
+                }
+              />
+              {/* Catch-all sends to /app */}
+              <Route path="*" element={<Navigate to="/app" replace />} />
+            </Routes>
+          </SyncProvider>
         </AuthProvider>
       </ThemeProvider>
     </ToastProvider>

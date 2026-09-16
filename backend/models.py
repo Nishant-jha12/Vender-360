@@ -165,6 +165,7 @@ class Sale(Base):
     # accurate even after the item's cost_price is later edited.
     total_cost = Column(Float, default=0.0)
     note = Column(String, nullable=True)
+    offline_id = Column(String, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
     vendor = relationship("Vendor", back_populates="sales")

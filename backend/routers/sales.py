@@ -19,21 +19,24 @@ from database import get_db
 router = APIRouter()
 
 
-@router.post("", status_code=201)
-@router.post("/", status_code=201, include_in_schema=False)
-def create_sale(
-    req: schemas.SaleCreateRequest,
-    vendor: models.Vendor = Depends(security.get_current_vendor),
-    db: Session = Depends(get_db),
+def _process_single_sale(
+    db: Session,
+    vendor: models.Vendor,
+    items: List[schemas.SaleLineRequest],
+    payment_mode: str,
+    customer_id: Optional[str] = None,
+    note: Optional[str] = None,
+    offline_id: Optional[str] = None,
+    created_at: Optional[datetime] = None,
 ):
     customer: Optional[models.Customer] = None
-    if req.payment_mode == "khata":
-        if not req.customer_id:
+    if payment_mode == "khata":
+        if not customer_id:
             raise HTTPException(status_code=400, detail="Pick a customer to put this on khata")
         customer = (
             db.query(models.Customer)
             .filter(
-                models.Customer.id == req.customer_id,
+                models.Customer.id == customer_id,
                 models.Customer.vendor_id == vendor.id,
             )
             .first()
@@ -41,13 +44,17 @@ def create_sale(
         if not customer:
             raise HTTPException(status_code=404, detail="Customer not found")
 
+    sale_time = created_at or datetime.utcnow()
+
     sale = models.Sale(
         vendor_id=vendor.id,
         customer_id=customer.id if customer else None,
-        payment_mode=req.payment_mode,
-        note=req.note,
+        payment_mode=payment_mode,
+        note=note,
+        offline_id=offline_id,
         total_amount=0.0,
         total_cost=0.0,
+        created_at=sale_time,
     )
     db.add(sale)
     db.flush()  # assigns sale.id without committing
@@ -56,7 +63,7 @@ def create_sale(
     total_cost = 0.0
     stock_warnings: List[str] = []
 
-    for line in req.items:
+    for line in items:
         item: Optional[models.InventoryItem] = None
         if line.item_id:
             item = (
@@ -117,6 +124,7 @@ def create_sale(
                     qty=-line.qty,
                     source="billing",
                     confidence=1.0,
+                    created_at=sale_time,
                 )
             )
 
@@ -132,19 +140,59 @@ def create_sale(
                 customer_id=customer.id,
                 amount=sale.total_amount,
                 transaction_type="credit",
-                notes=req.note or "Counter sale on udhaar",
+                notes=note or "Counter sale on udhaar",
+                date=sale_time,
             )
         )
 
     db.add(
         models.ActivityLog(
             vendor_id=vendor.id,
-            action="Sale recorded",
+            action="Sale recorded" if not offline_id else "Offline sale synced",
             details=(
-                f"{len(req.items)} item(s), Rs {sale.total_amount:.2f} via {req.payment_mode}"
+                f"{len(items)} item(s), Rs {sale.total_amount:.2f} via {payment_mode}"
                 + (f" ({customer.name})" if customer else "")
+                + (" [offline sync]" if offline_id else "")
             ),
+            created_at=sale_time,
         )
+    )
+
+    return sale, stock_warnings, customer
+
+
+@router.post("", status_code=201)
+@router.post("/", status_code=201, include_in_schema=False)
+def create_sale(
+    req: schemas.SaleCreateRequest,
+    vendor: models.Vendor = Depends(security.get_current_vendor),
+    db: Session = Depends(get_db),
+):
+    if req.offline_id:
+        existing = (
+            db.query(models.Sale)
+            .filter(
+                models.Sale.vendor_id == vendor.id,
+                models.Sale.offline_id == req.offline_id,
+            )
+            .first()
+        )
+        if existing:
+            return {
+                "sale": schemas.SaleResponse.model_validate(existing).model_dump(),
+                "stock_warnings": [],
+                "customer_balance": existing.customer.total_credit_balance if existing.customer else None,
+            }
+
+    sale, stock_warnings, customer = _process_single_sale(
+        db=db,
+        vendor=vendor,
+        items=req.items,
+        payment_mode=req.payment_mode,
+        customer_id=req.customer_id,
+        note=req.note,
+        offline_id=req.offline_id,
+        created_at=req.created_at,
     )
 
     db.commit()
@@ -155,6 +203,62 @@ def create_sale(
         "stock_warnings": stock_warnings,
         "customer_balance": customer.total_credit_balance if customer else None,
     }
+
+
+@router.post("/sync-batch", response_model=schemas.SaleBatchSyncResponse)
+def sync_batch_sales(
+    req: schemas.SaleBatchSyncRequest,
+    vendor: models.Vendor = Depends(security.get_current_vendor),
+    db: Session = Depends(get_db),
+):
+    """Batch-synchronise sales recorded offline on the device.
+
+    Idempotent by offline_id so retries upon flaky network reconnects
+    will never double-count revenue, double-deplete inventory, or
+    double-charge a customer's khata.
+    """
+    synced_ids: List[str] = []
+    duplicates_skipped: List[str] = []
+    all_warnings: List[str] = []
+
+    for item in req.sales:
+        existing = (
+            db.query(models.Sale)
+            .filter(
+                models.Sale.vendor_id == vendor.id,
+                models.Sale.offline_id == item.offline_id,
+            )
+            .first()
+        )
+        if existing:
+            duplicates_skipped.append(item.offline_id)
+            continue
+
+        try:
+            with db.begin_nested():
+                sale, warnings, _ = _process_single_sale(
+                    db=db,
+                    vendor=vendor,
+                    items=item.items,
+                    payment_mode=item.payment_mode,
+                    customer_id=item.customer_id,
+                    note=item.note,
+                    offline_id=item.offline_id,
+                    created_at=item.created_at,
+                )
+                synced_ids.append(item.offline_id)
+                all_warnings.extend(warnings)
+        except Exception:
+            continue
+
+    db.commit()
+
+    return schemas.SaleBatchSyncResponse(
+        synced_ids=synced_ids,
+        duplicates_skipped=duplicates_skipped,
+        stock_warnings=all_warnings,
+        synced_count=len(synced_ids),
+    )
 
 
 @router.get("/recent", response_model=List[schemas.SaleResponse])

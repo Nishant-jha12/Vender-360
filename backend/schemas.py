@@ -312,6 +312,8 @@ class SaleCreateRequest(BaseModel):
     payment_mode: str
     customer_id: Optional[str] = None
     note: Optional[str] = Field(default=None, max_length=200)
+    offline_id: Optional[str] = Field(default=None, max_length=100)
+    created_at: Optional[datetime] = None
 
     @field_validator("payment_mode")
     @classmethod
@@ -320,6 +322,34 @@ class SaleCreateRequest(BaseModel):
         if cleaned not in ("cash", "upi", "khata"):
             raise ValueError("payment_mode must be one of: cash, upi, khata")
         return cleaned
+
+
+class SaleSyncItem(BaseModel):
+    offline_id: str = Field(min_length=1, max_length=100)
+    items: List[SaleLineRequest] = Field(min_length=1, max_length=200)
+    payment_mode: str
+    customer_id: Optional[str] = None
+    note: Optional[str] = Field(default=None, max_length=200)
+    created_at: Optional[datetime] = None
+
+    @field_validator("payment_mode")
+    @classmethod
+    def known_mode(cls, v: str) -> str:
+        cleaned = v.strip().lower()
+        if cleaned not in ("cash", "upi", "khata"):
+            raise ValueError("payment_mode must be one of: cash, upi, khata")
+        return cleaned
+
+
+class SaleBatchSyncRequest(BaseModel):
+    sales: List[SaleSyncItem] = Field(min_length=1, max_length=500)
+
+
+class SaleBatchSyncResponse(BaseModel):
+    synced_ids: List[str]
+    duplicates_skipped: List[str]
+    stock_warnings: List[str]
+    synced_count: int
 
 
 class SaleItemResponse(BaseModel):
@@ -340,6 +370,7 @@ class SaleResponse(BaseModel):
     profit: float
     customer_id: Optional[str] = None
     note: Optional[str] = None
+    offline_id: Optional[str] = None
     created_at: datetime
     line_items: List[SaleItemResponse] = []
 
