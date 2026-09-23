@@ -12,6 +12,7 @@ import { LANGUAGES } from './i18n';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
 import { SyncProvider, useSync } from './context/SyncContext';
+import { SoundboxProvider } from './context/SoundboxContext';
 import { ToastProvider } from './components/Toast';
 import { useApi } from './hooks/useApi';
 import SyncCenterModal from './components/SyncCenterModal';
@@ -431,22 +432,24 @@ export default function App() {
       <ThemeProvider>
         <AuthProvider>
           <SyncProvider>
-            <Routes>
-              {/* Direct App Entry - No Marketing Website! */}
-              <Route path="/" element={<Navigate to="/app" replace />} />
-              <Route path="/auth" element={<Auth />} />
-              <Route path="/legal" element={<Legal />} />
-              <Route
-                path="/app/*"
-                element={
-                  <ProtectedRoute>
-                    <AppLayout />
-                  </ProtectedRoute>
-                }
-              />
-              {/* Catch-all sends to /app */}
-              <Route path="*" element={<Navigate to="/app" replace />} />
-            </Routes>
+            <SoundboxProvider>
+              <Routes>
+                {/* Direct App Entry - No Marketing Website! */}
+                <Route path="/" element={<Navigate to="/app" replace />} />
+                <Route path="/auth" element={<Auth />} />
+                <Route path="/legal" element={<Legal />} />
+                <Route
+                  path="/app/*"
+                  element={
+                    <ProtectedRoute>
+                      <AppLayout />
+                    </ProtectedRoute>
+                  }
+                />
+                {/* Catch-all sends to /app */}
+                <Route path="*" element={<Navigate to="/app" replace />} />
+              </Routes>
+            </SoundboxProvider>
           </SyncProvider>
         </AuthProvider>
       </ThemeProvider>

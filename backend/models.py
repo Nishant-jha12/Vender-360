@@ -74,6 +74,7 @@ class Vendor(Base):
     customers = relationship("Customer", back_populates="vendor", cascade="all, delete")
     sales = relationship("Sale", back_populates="vendor", cascade="all, delete")
     intakes = relationship("StockIntake", back_populates="vendor", cascade="all, delete")
+    upi_payments = relationship("UpiPayment", back_populates="vendor", cascade="all, delete")
 
 
 class Customer(Base):
@@ -407,3 +408,32 @@ class ActivityLog(Base):
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
     vendor = relationship("Vendor", back_populates="activities")
+
+
+class UpiPayment(Base):
+    """Dynamic UPI payment intent for counter checkout and khata settlements.
+
+    Enables auto-reconciliation, webhook integration, and soundbox announcement
+    upon customer payment confirmation.
+    """
+
+    __tablename__ = "upi_payments"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    vendor_id = Column(String, ForeignKey("vendors.id"), index=True)
+    txn_ref = Column(String, unique=True, index=True)
+    amount = Column(Float, nullable=False)
+    status = Column(String, default="pending", index=True)  # 'pending' | 'completed' | 'failed' | 'expired'
+    note = Column(String, nullable=True)
+    customer_id = Column(String, ForeignKey("customers.id"), nullable=True, index=True)
+
+    payer_vpa = Column(String, nullable=True)
+    payer_name = Column(String, nullable=True)
+    bank_ref_num = Column(String, nullable=True)  # 12-digit UTR/RRN
+    upi_url = Column(String, nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    vendor = relationship("Vendor", back_populates="upi_payments")
+    customer = relationship("Customer")

@@ -122,19 +122,21 @@ CREDENTIALS_ERROR = HTTPException(
 
 def get_current_vendor(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
+    token: Optional[str] = None,
     db: Session = Depends(get_db),
 ) -> models.Vendor:
-    """Resolve the caller from their bearer token.
+    """Resolve the caller from their bearer token or token query param.
 
     The single place a vendor identity is established. No endpoint accepts a
     vendor_id from the client -- that was how the original build let anyone read
     any store's data by editing the URL.
     """
-    if credentials is None or not credentials.credentials:
+    raw_token = (credentials.credentials if credentials and credentials.credentials else None) or token
+    if not raw_token:
         raise CREDENTIALS_ERROR
 
     try:
-        payload = decode_access_token(credentials.credentials)
+        payload = decode_access_token(raw_token)
     except ValueError:
         raise CREDENTIALS_ERROR
 

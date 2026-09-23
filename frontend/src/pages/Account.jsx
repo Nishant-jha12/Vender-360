@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  Database, FileText, Globe, Hash, Loader2, LogOut, Moon, Package, Save, ShieldCheck, Smartphone,
-  Store, Sun, User,
+  Database, FileText, Globe, Hash, Loader2, LogOut, Moon, Package, Play, Save, ShieldCheck, Smartphone,
+  Store, Sun, User, Volume2, VolumeX,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { api, errorMessage } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
+import { useSoundbox } from '../context/SoundboxContext';
 import { useToast } from '../components/Toast';
 import { CardSkeleton, ErrorState } from '../components/States';
 import { useApi } from '../hooks/useApi';
@@ -23,6 +24,29 @@ export default function Account() {
 
   const { data: profile, loading, error, reload, setData } = useApi('/vendor/me');
   const health = useApi('/analytics/health-score');
+
+  const {
+    enabled: soundboxEnabled,
+    setEnabled: setSoundboxEnabled,
+    lang: soundboxLang,
+    setLang: setSoundboxLang,
+    volume: soundboxVolume,
+    setVolume: setSoundboxVolume,
+    testVoice: testSoundboxVoice,
+  } = useSoundbox();
+  const [testingVoice, setTestingVoice] = useState(false);
+
+  const handleTestVoice = async () => {
+    if (testingVoice) return;
+    setTestingVoice(true);
+    try {
+      await testSoundboxVoice(150, soundboxLang);
+    } catch {
+      // test fallback
+    } finally {
+      setTestingVoice(false);
+    }
+  };
 
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({ name: '', store_name: '', phone: '', upi_id: '', gstin: '' });
@@ -238,6 +262,91 @@ export default function Account() {
             <span>{t('theme.dark')}</span>
           </button>
         </div>
+      </div>
+
+      {/* Soundbox Configuration */}
+      <div className="bg-brand-surface rounded-2xl border border-brand-border shadow-sm p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-bold text-brand-ink flex items-center gap-2">
+            <Volume2 size={16} className="text-brand-primary" />
+            {t('soundbox.title', 'UPI Voice Soundbox')}
+          </h3>
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              checked={soundboxEnabled}
+              onChange={(e) => setSoundboxEnabled(e.target.checked)}
+              className="sr-only peer"
+            />
+            <div className="w-11 h-6 bg-brand-border peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-primary"></div>
+          </label>
+        </div>
+
+        <p className="text-xs text-brand-muted leading-relaxed mb-3">
+          {t('soundbox.description', 'Plays electronic chime and announces payment received in your regional language instantly upon UPI confirmation.')}
+        </p>
+
+        {soundboxEnabled && (
+          <div className="space-y-3.5 pt-3 border-t border-brand-border/60">
+            <div>
+              <label className="text-[11px] font-bold text-brand-muted uppercase tracking-wider block mb-1.5">
+                {t('soundbox.language_label', 'Announcement Language')}
+              </label>
+              <select
+                value={soundboxLang}
+                onChange={(e) => setSoundboxLang(e.target.value)}
+                className="w-full bg-brand-bg border border-brand-border rounded-lg px-3 py-2 text-xs text-brand-ink font-semibold focus:outline-none focus:ring-2 focus:ring-brand-primary"
+              >
+                <option value="hi-IN">हिंदी (Hindi) - "वेंडर 360 पर 150 रुपये प्राप्त हुए"</option>
+                <option value="mr-IN">मराठी (Marathi) - "वेंडर 360 वर 150 रुपये प्राप्त झाले"</option>
+                <option value="bn-IN">বাংলা (Bengali) - "ভেন্ডার 360-এ 150 টাকা পাওয়া গেছে"</option>
+                <option value="en-IN">English (Indian) - "Received 150 rupees on Vendor 360"</option>
+              </select>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between text-[11px] font-bold text-brand-muted uppercase tracking-wider mb-1.5">
+                <span>{t('soundbox.volume_label', 'Soundbox Volume')}</span>
+                <span className="font-mono text-brand-ink">{Math.round(soundboxVolume * 100)}%</span>
+              </div>
+              <div className="flex items-center gap-2">
+                {soundboxVolume === 0 ? (
+                  <VolumeX size={15} className="text-brand-muted" />
+                ) : (
+                  <Volume2 size={15} className="text-brand-primary" />
+                )}
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={soundboxVolume}
+                  onChange={(e) => setSoundboxVolume(parseFloat(e.target.value))}
+                  className="w-full accent-brand-primary h-1.5 bg-brand-border rounded-lg cursor-pointer"
+                />
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleTestVoice}
+              disabled={testingVoice}
+              className="w-full mt-1 py-2.5 px-3 rounded-xl border border-brand-primary/30 bg-brand-primary/5 hover:bg-brand-primary/10 text-brand-primary text-xs font-bold flex items-center justify-center gap-2 active:scale-[0.99] transition-all disabled:opacity-60"
+            >
+              {testingVoice ? (
+                <>
+                  <Loader2 size={14} className="animate-spin" />
+                  <span>{t('soundbox.testing', 'Playing chime & voice...')}</span>
+                </>
+              ) : (
+                <>
+                  <Play size={14} className="fill-brand-primary" />
+                  <span>{t('soundbox.test_button', '🔊 Test Soundbox Voice (₹150)')}</span>
+                </>
+              )}
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-3">

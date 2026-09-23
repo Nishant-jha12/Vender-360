@@ -376,6 +376,48 @@ class SaleResponse(BaseModel):
 
 
 # --------------------------------------------------------------------------
+# UPI & Soundbox Checkout
+# --------------------------------------------------------------------------
+class UpiIntentCreateRequest(BaseModel):
+    amount: float = Field(gt=0, le=100000)
+    note: Optional[str] = Field(default=None, max_length=80)
+    customer_id: Optional[str] = None
+
+
+class UpiPaymentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    txn_ref: str
+    amount: float
+    status: str
+    note: Optional[str] = None
+    customer_id: Optional[str] = None
+    payer_vpa: Optional[str] = None
+    payer_name: Optional[str] = None
+    bank_ref_num: Optional[str] = None
+    upi_url: str
+    qr_base64: Optional[str] = None
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+
+
+class UpiSimulationRequest(BaseModel):
+    txn_ref: str
+    payer_name: Optional[str] = "Customer (UPI)"
+    payer_vpa: Optional[str] = "customer@upi"
+
+
+class UpiWebhookPayload(BaseModel):
+    txn_ref: str
+    amount: float
+    status: str = "completed"
+    bank_ref_num: Optional[str] = None
+    payer_vpa: Optional[str] = None
+    payer_name: Optional[str] = None
+
+
+# --------------------------------------------------------------------------
 # Khata
 # --------------------------------------------------------------------------
 class CustomerCreate(BaseModel):

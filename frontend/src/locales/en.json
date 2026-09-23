@@ -57,7 +57,19 @@
     "queued_for_sync": "Queued for cloud sync",
     "offline_saved": "Bill of {{amount}} saved locally on device",
     "saved_offline_fallback": "Connection dropped. Bill saved offline safely and queued for sync!",
-    "offline_save_failed": "Could not save offline bill. Please try again."
+    "offline_save_failed": "Could not save offline bill. Please try again.",
+    "checkout_title": "Dynamic UPI Checkout",
+    "checkout_subtitle": "Scan with any UPI app (GPay, PhonePe, Paytm, BHIM)",
+    "amount_to_collect": "Amount to collect",
+    "enter_amount_hint": "Enter an amount to generate a QR.",
+    "generating_qr": "Generating dynamic QR...",
+    "qr_gen_failed": "Could not generate dynamic QR code",
+    "missing_upi_title": "Add your UPI ID first",
+    "missing_upi_desc": "Payments must go to your own account, so Vendor360 needs the UPI ID customers should pay.",
+    "open_account_settings": "Open Account Settings",
+    "open_upi_app": "Open in a UPI app",
+    "confirm_manual": "Payment received — record it",
+    "finalize_bill": "Complete & Finalize Sale"
   },
   "scan": {
     "title": "Stock intake",
@@ -357,5 +369,28 @@
     "kirana_tip_body": "You can continue billing customers even with zero internet or Wi-Fi. All bills will automatically sync once connection is restored.",
     "online_status": "Online status: Connected",
     "offline_status": "Offline status: Working locally"
+  },
+  "soundbox": {
+    "title": "UPI Voice Soundbox",
+    "description": "Plays electronic chime and announces payment received in your regional language instantly upon UPI confirmation.",
+    "language_label": "Announcement Language",
+    "volume_label": "Soundbox Volume",
+    "testing": "Playing chime & voice...",
+    "test_button": "🔊 Test Soundbox Voice (₹150)",
+    "payment_verified": "Payment Reconciled!",
+    "verified_desc": "Soundbox verified the payment on NPCI UPI network",
+    "received_badge": "Instant UPI Credit",
+    "payer": "Received from",
+    "bank_utr": "Bank UTR / Ref No",
+    "txn_ref": "Transaction ID",
+    "customer_vpa": "Payer VPA",
+    "audio_announced": "Voice announcement played",
+    "listening": "Soundbox waiting for payment...",
+    "active": "Active",
+    "muted": "Muted",
+    "simulating": "Simulating customer UPI transfer...",
+    "simulate_button": "⚡ Simulate Customer Payment (1-Tap Demo)",
+    "simulated_success": "Demo payment simulated successfully!",
+    "footer_hint": "Soundbox will automatically verify and announce payments in real-time."
   }
 }
