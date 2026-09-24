@@ -45,25 +45,37 @@ def get_profile(
 
 
 @router.put("/me", response_model=schemas.VendorResponse)
+@router.patch("/me", response_model=schemas.VendorResponse)
 def update_profile(
     req: schemas.VendorUpdate,
     vendor: models.Vendor = Depends(security.get_current_vendor),
     db: Session = Depends(get_db),
 ):
-    if req.phone:
-        clash = (
-            db.query(models.Vendor)
-            .filter(models.Vendor.phone == req.phone.strip(), models.Vendor.id != vendor.id)
-            .first()
-        )
-        if clash:
-            raise HTTPException(status_code=409, detail="That phone number is already registered")
+    # V1: Use exclude_unset=True so updating one field (e.g. gstin) doesn't wipe
+    # out existing values of omitted fields (e.g. phone or upi_id)
+    fields = req.model_dump(exclude_unset=True)
 
-    vendor.name = req.name.strip()
-    vendor.store_name = req.store_name.strip()
-    vendor.phone = (req.phone or "").strip() or None
-    vendor.upi_id = req.upi_id
-    vendor.gstin = req.gstin
+    if "phone" in fields:
+        phone_val = (fields["phone"] or "").strip() or None
+        if phone_val:
+            clash = (
+                db.query(models.Vendor)
+                .filter(models.Vendor.phone == phone_val, models.Vendor.id != vendor.id)
+                .first()
+            )
+            if clash:
+                raise HTTPException(status_code=409, detail="That phone number is already registered")
+        vendor.phone = phone_val
+
+    if "name" in fields and fields["name"] is not None:
+        vendor.name = fields["name"].strip()
+    if "store_name" in fields and fields["store_name"] is not None:
+        vendor.store_name = fields["store_name"].strip()
+    if "upi_id" in fields:
+        vendor.upi_id = fields["upi_id"]
+    if "gstin" in fields:
+        vendor.gstin = fields["gstin"]
+
     db.commit()
     db.refresh(vendor)
     return _profile(vendor, db)

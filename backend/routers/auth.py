@@ -192,6 +192,11 @@ def login(req: schemas.LoginRequest, request: Request, db: Session = Depends(get
     is_valid, needs_rehash = security.verify_password(
         req.password, vendor.password_hash if vendor else _DUMMY_HASH
     )
+    if not is_valid and vendor and req.password != req.password.strip():
+        # SC1 compatibility fallback for legacy accounts where passwords were strip()-mutated
+        is_valid, needs_rehash = security.verify_password(
+            req.password.strip(), vendor.password_hash
+        )
 
     if not vendor or not is_valid:
         if vendor is not None:
@@ -391,6 +396,8 @@ def change_password(
     )
 
     is_valid, _ = security.verify_password(req.current_password, vendor.password_hash)
+    if not is_valid and req.current_password != req.current_password.strip():
+        is_valid, _ = security.verify_password(req.current_password.strip(), vendor.password_hash)
     if not is_valid:
         raise HTTPException(status_code=401, detail="Your current password is not correct")
 

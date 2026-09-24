@@ -1835,4 +1835,249 @@ def test_voice_entry_vernacular_matching_and_intent_direction(client, vendor, db
     assert item_milk.current_qty == 5.0
 
 
+def test_sc1_password_edge_spaces_preserved_and_login_compatible(client, db_session):
+    """SC1: Passwords with leading/trailing spaces must not be mutated under the hood,
+    and legacy fallback ensures login works smoothly.
+    """
+    pw_with_spaces = "  spaced-passphrase-999  "
+    signup_res = client.post(
+        "/api/auth/signup",
+        json={
+            "name": "Spaced Vendor",
+            "username": "spaced_vendor",
+            "email": "spaced@example.com",
+            "phone": "+91 9123456780",
+            "password": pw_with_spaces,
+        },
+    )
+    assert signup_res.status_code == 200
+
+    # 1. Login with exact unstripped password succeeds
+    login_exact = client.post(
+        "/api/auth/login",
+        json={"identifier": "spaced_vendor", "password": pw_with_spaces},
+    )
+    assert login_exact.status_code == 200
+
+    # 2. Legacy fallback: an account whose stored hash was stripped allows login with spaced input
+    # (Simulates an account created prior to SC1 fix where password was stripped at signup)
+    import models
+    import security
+    vendor = db_session.query(models.Vendor).filter(models.Vendor.username == "spaced_vendor").first()
+    vendor.password_hash = security.hash_password(pw_with_spaces.strip())
+    db_session.commit()
+
+    login_fallback = client.post(
+        "/api/auth/login",
+        json={"identifier": "spaced_vendor", "password": pw_with_spaces},
+    )
+    assert login_fallback.status_code == 200
+
+
+def test_sc3_1970_epoch_sale_date_rejected(client, vendor, item):
+    """SC3: 1970 Unix epoch / dead RTC dates must be rejected with 422."""
+    headers, _ = vendor
+
+    # 1. 1970 Unix Epoch rejected
+    res_epoch = client.post(
+        "/api/sales",
+        headers=headers,
+        json={
+            "payment_mode": "cash",
+            "items": [{"item_id": item["id"], "qty": 1}],
+            "created_at": "1970-01-01T00:00:00Z",
+        },
+    )
+    assert res_epoch.status_code == 422
+    assert "2020" in res_epoch.text or "1970" in res_epoch.text
+
+    # 2. Year 2018 (too old) rejected
+    res_old = client.post(
+        "/api/sales",
+        headers=headers,
+        json={
+            "payment_mode": "cash",
+            "items": [{"item_id": item["id"], "qty": 1}],
+            "created_at": "2018-05-15T12:00:00Z",
+        },
+    )
+    assert res_old.status_code == 422
+
+    # 3. Valid recent date accepted
+    valid_time = datetime.now().isoformat()
+    res_valid = client.post(
+        "/api/sales",
+        headers=headers,
+        json={
+            "payment_mode": "cash",
+            "items": [{"item_id": item["id"], "qty": 1}],
+            "created_at": valid_time,
+        },
+    )
+    assert res_valid.status_code in (200, 201)
+
+
+def test_iv2_duplicate_barcode_rejected_on_update(client, vendor):
+    """IV2: Updating an item to an existing barcode already on another active item must return 409."""
+    headers, _ = vendor
+
+    # Item 1 with barcode A
+    res1 = client.post(
+        "/api/inventory",
+        headers=headers,
+        json={
+            "sku_name": "Product Alpha",
+            "category": "Snacks",
+            "unit": "packets",
+            "barcode": "8909990000001",
+            "selling_price": 20.0,
+        },
+    )
+    assert res1.status_code == 201
+    item1_id = res1.json()["id"]
+
+    # Item 2 with barcode B
+    res2 = client.post(
+        "/api/inventory",
+        headers=headers,
+        json={
+            "sku_name": "Product Beta",
+            "category": "Snacks",
+            "unit": "packets",
+            "barcode": "8909990000002",
+            "selling_price": 30.0,
+        },
+    )
+    assert res2.status_code == 201
+    item2_id = res2.json()["id"]
+
+    # Updating Item 2 with Item 1's barcode must clash with 409
+    update_clash = client.put(
+        f"/api/inventory/{item2_id}",
+        headers=headers,
+        json={"barcode": "8909990000001"},
+    )
+    assert update_clash.status_code == 409
+    assert "already on Product Alpha" in update_clash.json()["detail"]
+
+    # Updating Item 2 keeping its own barcode must succeed
+    update_self = client.put(
+        f"/api/inventory/{item2_id}",
+        headers=headers,
+        json={"barcode": "8909990000002", "selling_price": 35.0},
+    )
+    assert update_self.status_code == 200
+    assert update_self.json()["selling_price"] == 35.0
+
+
+def test_v1_put_vendor_me_preserves_unset_fields(client, vendor):
+    """V1: PUT /vendor/me and PATCH /vendor/me must preserve unset fields rather than wiping them."""
+    headers, _ = vendor
+
+    # Initial setup
+    res_init = client.put(
+        "/api/vendor/me",
+        headers=headers,
+        json={
+            "name": "Full Profile",
+            "store_name": "Full Store",
+            "phone": "+91 9888877777",
+            "upi_id": "fullstore@upi",
+            "gstin": "27AAPFU0939F1ZV",
+        },
+    )
+    assert res_init.status_code == 200
+    data_init = res_init.json()
+    assert data_init["phone"] == "+91 9888877777"
+    assert data_init["upi_id"] == "fullstore@upi"
+    assert data_init["gstin"] == "27AAPFU0939F1ZV"
+
+    # PUT updating only store_name must not erase phone, upi_id, or gstin
+    res_partial_put = client.put(
+        "/api/vendor/me",
+        headers=headers,
+        json={"store_name": "Updated Store Name"},
+    )
+    assert res_partial_put.status_code == 200
+    data_put = res_partial_put.json()
+    assert data_put["store_name"] == "Updated Store Name"
+    assert data_put["phone"] == "+91 9888877777"
+    assert data_put["upi_id"] == "fullstore@upi"
+    assert data_put["gstin"] == "27AAPFU0939F1ZV"
+
+    # PATCH updating only upi_id must preserve everything else
+    res_patch = client.patch(
+        "/api/vendor/me",
+        headers=headers,
+        json={"upi_id": "newmerchant@icici"},
+    )
+    assert res_patch.status_code == 200
+    data_patch = res_patch.json()
+    assert data_patch["upi_id"] == "newmerchant@icici"
+    assert data_patch["phone"] == "+91 9888877777"
+    assert data_patch["store_name"] == "Updated Store Name"
+
+
+def test_k2_webhook_status_canonicalization_and_rejection(client, vendor):
+    """K2: Webhook must canonicalize gateway status strings, reject arbitrary values,
+    and not broadcast payment_completed or set completed_at on failure.
+    """
+    import hashlib
+    import hmac
+    import json
+    from config import settings
+
+    headers, _ = vendor
+    settings.WEBHOOK_SIGNING_SECRET = "webhook-test-secret-999"
+
+    # Setup UPI ID
+    client.put(
+        "/api/vendor/me",
+        headers=headers,
+        json={"name": "Owner", "store_name": "Store", "upi_id": "test@upi"},
+    )
+
+    # 1. Case-insensitive gateway status canonicalization (e.g. "SUCCESS" -> "completed")
+    intent1 = client.post("/api/checkout/create-intent", headers=headers, json={"amount": 75.0}).json()
+    ref1 = intent1["txn_ref"]
+
+    payload1 = json.dumps({"txn_ref": ref1, "amount": 75.0, "status": "SUCCESS"}).encode()
+    sig1 = hmac.new(settings.WEBHOOK_SIGNING_SECRET.encode(), payload1, hashlib.sha256).hexdigest()
+    res1 = client.post(
+        "/api/checkout/webhook",
+        content=payload1,
+        headers={"x-webhook-signature": sig1, "content-type": "application/json"},
+    )
+    assert res1.status_code == 200
+    status1 = client.get(f"/api/checkout/intent/{ref1}/status", headers=headers).json()
+    assert status1["status"] == "completed"
+    assert status1["completed_at"] is not None
+
+    # 2. "FAILED" status: must set status to "failed" and NOT set completed_at
+    intent2 = client.post("/api/checkout/create-intent", headers=headers, json={"amount": 85.0}).json()
+    ref2 = intent2["txn_ref"]
+
+    payload2 = json.dumps({"txn_ref": ref2, "amount": 85.0, "status": "FAILED"}).encode()
+    sig2 = hmac.new(settings.WEBHOOK_SIGNING_SECRET.encode(), payload2, hashlib.sha256).hexdigest()
+    res2 = client.post(
+        "/api/checkout/webhook",
+        content=payload2,
+        headers={"x-webhook-signature": sig2, "content-type": "application/json"},
+    )
+    assert res2.status_code == 200
+    status2 = client.get(f"/api/checkout/intent/{ref2}/status", headers=headers).json()
+    assert status2["status"] == "failed"
+    assert status2["completed_at"] is None
+
+    # 3. Arbitrary invalid status string: rejected with 422
+    payload_bad = json.dumps({"txn_ref": ref2, "amount": 85.0, "status": "random_arbitrary_string"}).encode()
+    sig_bad = hmac.new(settings.WEBHOOK_SIGNING_SECRET.encode(), payload_bad, hashlib.sha256).hexdigest()
+    res_bad = client.post(
+        "/api/checkout/webhook",
+        content=payload_bad,
+        headers={"x-webhook-signature": sig_bad, "content-type": "application/json"},
+    )
+    assert res_bad.status_code == 422
+
+
 

@@ -314,7 +314,8 @@ async def payment_webhook(
 
     if payment.status != "completed":
         payment.status = payload.status
-        payment.completed_at = datetime.utcnow()
+        if payload.status == "completed":
+            payment.completed_at = datetime.utcnow()
         if payload.bank_ref_num:
             payment.bank_ref_num = payload.bank_ref_num
         if payload.payer_vpa:
@@ -325,9 +326,10 @@ async def payment_webhook(
         db.commit()
         db.refresh(payment)
 
-        # Broadcast
+        # Broadcast: only claim payment_completed when status is actually completed
+        event_name = "payment_completed" if payload.status == "completed" else f"payment_{payload.status}"
         event_data = {
-            "event": "payment_completed",
+            "event": event_name,
             "txn_ref": payment.txn_ref,
             "amount": payment.amount,
             "status": payment.status,

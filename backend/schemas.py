@@ -4,7 +4,7 @@ Response models matter for more than tidiness here: the original build returned
 raw SQLAlchemy objects, which leaked internal columns (vendor_id, sync_status)
 straight to the browser.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -22,6 +22,20 @@ def as_naive_utc(value: Optional[datetime]) -> Optional[datetime]:
     if value is None or value.tzinfo is None:
         return value
     return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def validate_sale_created_at(value: Optional[datetime]) -> Optional[datetime]:
+    """SC3: Validate sale timestamps to prevent Unix epoch 1970 injection
+    (e.g. from POS devices with dead RTC batteries or manipulated payloads).
+    """
+    dt = as_naive_utc(value)
+    if dt is None:
+        return None
+    if dt < datetime(2020, 1, 1):
+        raise ValueError("Sale date cannot be earlier than 2020-01-01 (1970/epoch dates not accepted)")
+    if dt > datetime.utcnow() + timedelta(days=2):
+        raise ValueError("Sale date cannot be in the future")
+    return dt
 
 
 # --------------------------------------------------------------------------
@@ -44,7 +58,9 @@ def _reject_weak_password(value: str) -> str:
         raise ValueError("That password is too common. Pick something else")
     if len(set(cleaned)) < 4:
         raise ValueError("That password repeats too few characters")
-    return cleaned
+    # SC1: Do not silently strip edge spaces from the returned password.
+    # Preserves user-supplied passphrases and intentional spacing.
+    return value
 
 
 class SignupRequest(BaseModel):
@@ -158,8 +174,8 @@ class SecurityEventResponse(BaseModel):
 # Vendor
 # --------------------------------------------------------------------------
 class VendorUpdate(BaseModel):
-    name: str = Field(min_length=1, max_length=120)
-    store_name: str = Field(min_length=1, max_length=140)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    store_name: Optional[str] = Field(default=None, min_length=1, max_length=140)
     phone: Optional[str] = Field(default=None, max_length=20)
     upi_id: Optional[str] = Field(default=None, max_length=100)
     gstin: Optional[str] = Field(default=None, max_length=20)
@@ -341,7 +357,7 @@ class SaleCreateRequest(BaseModel):
     offline_id: Optional[str] = Field(default=None, max_length=100)
     created_at: Optional[datetime] = None
 
-    _naive_dates = field_validator("created_at")(as_naive_utc)
+    _naive_dates = field_validator("created_at")(validate_sale_created_at)
 
     @field_validator("payment_mode")
     @classmethod
@@ -360,7 +376,7 @@ class SaleSyncItem(BaseModel):
     note: Optional[str] = Field(default=None, max_length=200)
     created_at: Optional[datetime] = None
 
-    _naive_dates = field_validator("created_at")(as_naive_utc)
+    _naive_dates = field_validator("created_at")(validate_sale_created_at)
 
     @field_validator("payment_mode")
     @classmethod
@@ -444,13 +460,45 @@ class UpiSimulationRequest(BaseModel):
     payer_vpa: Optional[str] = "customer@upi"
 
 
+_CANONICAL_PAYMENT_STATUSES = {
+    "completed": "completed",
+    "success": "completed",
+    "successful": "completed",
+    "paid": "completed",
+    "captured": "completed",
+    "settled": "completed",
+    "txn_success": "completed",
+    "failed": "failed",
+    "failure": "failed",
+    "error": "failed",
+    "txn_failure": "failed",
+    "user_dropped": "failed",
+    "expired": "expired",
+    "timed_out": "expired",
+    "pending": "pending",
+}
+
+
 class UpiWebhookPayload(BaseModel):
     txn_ref: str
     amount: float = Field(gt=0, allow_inf_nan=False)
-    status: Literal["completed", "failed", "expired"] = "completed"
+    status: Literal["completed", "failed", "expired", "pending"] = "completed"
     bank_ref_num: Optional[str] = None
     payer_vpa: Optional[str] = None
     payer_name: Optional[str] = None
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def canonical_status(cls, v: object) -> str:
+        if not v:
+            return "completed"
+        cleaned = str(v).strip().lower()
+        if cleaned in _CANONICAL_PAYMENT_STATUSES:
+            return _CANONICAL_PAYMENT_STATUSES[cleaned]
+        raise ValueError(
+            f"Invalid payment status '{v}'. Allowed statuses: completed, failed, expired, pending."
+        )
+
 
 
 # --------------------------------------------------------------------------

@@ -270,6 +270,21 @@ def update_item(
                 detail="Item was modified by another operation. Please refresh before saving.",
             )
 
+    # IV2: Prevent duplicate barcode conflict with another active item owned by this vendor
+    if req.barcode:
+        clash = (
+            db.query(models.InventoryItem)
+            .filter(
+                models.InventoryItem.vendor_id == vendor.id,
+                models.InventoryItem.barcode == req.barcode,
+                models.InventoryItem.id != item.id,
+                models.InventoryItem.is_archived.is_(False),
+            )
+            .first()
+        )
+        if clash:
+            raise HTTPException(status_code=409, detail=f"That barcode is already on {clash.sku_name}")
+
     fields = req.model_dump(exclude_unset=True)
     fields.pop("last_updated", None)
     requested_qty = fields.pop("current_qty", None)
