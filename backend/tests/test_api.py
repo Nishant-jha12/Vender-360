@@ -1748,3 +1748,91 @@ def test_devanagari_and_non_ascii_otp_handled_safely(client):
     assert "token" in res_valid.json()
 
 
+def test_voice_entry_vernacular_matching_and_intent_direction(client, vendor, db_session):
+    """Voice entry handles non-Latin item matching (Devanagari, Bengali) and prevents
+    misfires on 'aa gaya' (added) and 'stock' (noun, not override of sold)."""
+    import models
+    headers, vendor_id = vendor
+
+    # Create test SKUs
+    item_milk = models.InventoryItem(
+        vendor_id=vendor_id,
+        sku_name="Amul Taaza Milk 500ml",
+        category="Dairy",
+        unit="packets",
+        current_qty=0.0,
+        cost_price=27.0,
+        selling_price=33.0,
+    )
+    item_bread = models.InventoryItem(
+        vendor_id=vendor_id,
+        sku_name="Britannia Whole Wheat Bread",
+        category="Bakery",
+        unit="loaves",
+        current_qty=15.0,
+        cost_price=38.0,
+        selling_price=48.0,
+    )
+    item_oil = models.InventoryItem(
+        vendor_id=vendor_id,
+        sku_name="Fortune Sunflower Oil 1L",
+        category="Staples",
+        unit="pouches",
+        current_qty=10.0,
+        cost_price=145.0,
+        selling_price=170.0,
+    )
+    db_session.add_all([item_milk, item_bread, item_oil])
+    db_session.commit()
+
+    # 1. Hindi/Devanagari matching + "aa gaya" phrase (direction +1)
+    res = client.post(
+        "/api/inventory/voice-entry",
+        json={"transcript": "5 अमूल दूध आ गया", "commit": False},
+        headers=headers,
+    )
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["understood"] is True
+    assert data["item_id"] == item_milk.id
+    assert data["qty"] == 5.0
+    assert data["direction"] == 1  # "aa gaya" must be +1, not -1 from "gaya"
+
+    # 2. "stock se 5 bread becha" (direction -1)
+    res = client.post(
+        "/api/inventory/voice-entry",
+        json={"transcript": "stock se 5 bread becha", "commit": False},
+        headers=headers,
+    )
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["understood"] is True
+    assert data["item_id"] == item_bread.id
+    assert data["qty"] == 5.0
+    assert data["direction"] == -1  # "stock" noun must not override "becha" (-1)
+
+    # 3. Bengali script matching + "bikri" (direction -1)
+    res = client.post(
+        "/api/inventory/voice-entry",
+        json={"transcript": "২ প্যাকেট দুধ বিক্রি", "commit": False},
+        headers=headers,
+    )
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["understood"] is True
+    assert data["item_id"] == item_milk.id
+    assert data["qty"] == 2.0
+    assert data["direction"] == -1
+
+    # 4. Two-phase flow: commit confirmed voice entry
+    res_commit = client.post(
+        "/api/inventory/voice-entry",
+        json={"transcript": "5 अमूल दूध आ गया", "commit": True, "item_id": item_milk.id, "qty": 5.0},
+        headers=headers,
+    )
+    assert res_commit.status_code == 200
+    db_session.refresh(item_milk)
+    assert item_milk.current_qty == 5.0
+
+
+

@@ -365,11 +365,27 @@ class VoiceEntryRequest(BaseModel):
     qty: Optional[float] = None
 
 
+# Multi-word intent phrases (checked before single-word triggers)
+_ADDED_PHRASES = (
+    "aa gaya", "aa gaye", "aa gayi", "aagaya", "aagaye", "aagayi",
+    "आ गया", "आ गए", "आ गई", "आगया", "आगए", "आगई",
+    "stock in", "new stock", "stock aaya", "stock aayi", "stock aale", "stock milale",
+    "स्टॉक आया", "स्टॉक आला", "नवीन स्टॉक", "नया स्टॉक",
+    "স্টক এসেছে", "নতুন স্টক"
+)
+
+_SOLD_PHRASES = (
+    "chala gaya", "bech diya", "bik gaya", "nikal gaya", "khatam ho gaya",
+    "out of stock", "stock out", "stock se becha", "stock me se becha",
+    "चला गया", "बेच दिया", "बिक गया", "निकल गया", "खत्म हो गया",
+    "বিক্রি হয়েছে", "চলে গেছে"
+)
+
 # Intent keywords, including Roman, Devanagari, and Bengali scripts
 _SOLD_WORDS = {
     "sold", "sell", "minus", "less",
     # Hindi/Marathi (Roman & Devanagari)
-    "bika", "bike", "becha", "bechi", "gaya", "vikla", "vikale", "kam", "kami",
+    "bika", "bike", "becha", "bechi", "vikla", "vikale", "kam", "kami",
     "बेचा", "बिका", "बेची", "विकला", "गेला", "कमी",
     # Bengali (Roman & Script)
     "bikri", "bechechi", "geche", "biklo",
@@ -377,7 +393,7 @@ _SOLD_WORDS = {
 }
 
 _ADDED_WORDS = {
-    "added", "add", "received", "receive", "stock", "plus", "more",
+    "added", "add", "received", "receive", "plus", "more", "restock",
     # Hindi/Marathi (Roman & Devanagari)
     "aaya", "aayi", "liya", "kharida", "aale", "milale",
     "आया", "आले", "खरीदा", "जोड़ा", "मिळाले",
@@ -388,7 +404,7 @@ _ADDED_WORDS = {
 
 _INDIC_DIGITS = {
     '०': '0', '१': '1', '२': '2', '३': '3', '४': '4', '५': '5', '६': '6', '७': '7', '८': '8', '९': '9',
-    '০': '0', '১': '1', '২': '2', '৩': '3', '৪': '4', '৫': '5', '৬': '6', '৭': '7', '৮': '8', '৯': '9',
+    '০': '0', '১': '1', '২': '2', '৩': '3', '৪': '4', '৫': '5', '⑥': '6', '৭': '7', '৮': '8', '৯': '9',
 }
 
 _NUMBER_WORDS = {
@@ -406,13 +422,120 @@ _NUMBER_WORDS = {
     "আট": 8, "নয়": 9, "দশ": 10, "কুড়ি": 20, "পঞ্চাশ": 50, "একশো": 100,
 }
 
+# Cross-script Kirana term and grocery brand synonyms
+_SYNONYMS = {
+    # Milk / Dairy
+    "दूध": ["milk", "doodh", "dairy", "taaza"],
+    "दोध": ["milk", "doodh", "dairy"],
+    "দুধ": ["milk", "doodh", "dairy"],
+    "doodh": ["milk", "dairy"],
+    "dudh": ["milk", "dairy"],
+    "दही": ["dahi", "curd", "yogurt"],
+    "দই": ["dahi", "curd", "yogurt"],
+    "curd": ["dahi"],
+    "तूप": ["ghee"],
+    "घी": ["ghee"],
+    "ঘি": ["ghee"],
+    "मक्खन": ["butter"],
+    "মাখন": ["butter"],
+    "पनीर": ["paneer"],
+    "পনির": ["paneer"],
+
+    # Oil / Fat
+    "तेल": ["oil", "tel"],
+    "তেল": ["oil", "tel"],
+    "tel": ["oil"],
+
+    # Salt / Spices / Sugar
+    "नमक": ["salt", "namak"],
+    "নুন": ["salt", "noon"],
+    "मीठ": ["salt"],
+    "namak": ["salt"],
+    "चीनी": ["sugar", "chini"],
+    "চিনি": ["sugar", "chini"],
+    "साखर": ["sugar"],
+    "chini": ["sugar"],
+    "मसाला": ["masala", "spice"],
+    "মশলা": ["masala", "spice"],
+    "हल्दी": ["haldi", "turmeric"],
+    "হলুদ": ["haldi", "turmeric"],
+    "मिर्च": ["chilli", "mirch"],
+    "मिरची": ["chilli", "mirch"],
+    "লঙ্কা": ["chilli", "mirch"],
+
+    # Tea / Beverages
+    "चाय": ["tea", "chai"],
+    "चहा": ["tea", "chai"],
+    "চা": ["tea", "chai"],
+    "chai": ["tea"],
+
+    # Grains & Flour
+    "आटा": ["atta", "flour", "wheat"],
+    "আটা": ["atta", "flour", "wheat"],
+    "पीठ": ["atta", "flour", "wheat"],
+    "atta": ["flour", "wheat"],
+    "चावल": ["rice", "chawal"],
+    "চাল": ["rice", "chawal"],
+    "तांदूळ": ["rice", "chawal"],
+    "chawal": ["rice"],
+    "दाल": ["dal", "pulses", "lentil"],
+    "ডাল": ["dal", "pulses", "lentil"],
+    "पोहा": ["poha"],
+    "চিঁড়ে": ["poha"],
+
+    # Bakery & Snacks
+    "ब्रेड": ["bread"],
+    "ব্রেড": ["bread"],
+    "পাউরুটি": ["bread"],
+    "पाव": ["bread", "pav"],
+    "बिस्कुट": ["biscuit", "biscuits", "parle"],
+    "বিস্কুট": ["biscuit", "biscuits", "parle"],
+    "biskut": ["biscuit", "biscuits"],
+    "मैगी": ["maggi", "noodles"],
+    "ম্যাগি": ["maggi", "noodles"],
+    "নুডুলস": ["noodles", "maggi"],
+
+    # Household & Personal
+    "साबुन": ["soap", "bar", "surf", "detergent"],
+    "সাবান": ["soap", "bar", "surf", "detergent"],
+    "सर्फ": ["surf", "detergent"],
+    "সার্ফ": ["surf", "detergent"],
+    "कोलगेट": ["colgate", "toothpaste"],
+    "কোলগেট": ["colgate", "toothpaste"],
+    "टूथपेस्ट": ["toothpaste", "colgate"],
+
+    # Common Brands
+    "अमूल": ["amul"],
+    "আমুল": ["amul"],
+    "टाटा": ["tata"],
+    "টাটা": ["tata"],
+    "पारले": ["parle"],
+    "পারলে": ["parle"],
+    "ब्रिटानिया": ["britannia"],
+    "ব্রিটানিয়া": ["britannia"],
+    "फॉर्च्यून": ["fortune"],
+    "ফরচুন": ["fortune"],
+    "आशीर्वाद": ["aashirvaad", "atta"],
+    "আশীর্বাদ": ["aashirvaad", "atta"],
+    "मदर": ["mother"],
+    "মাদার": ["mother"],
+    "रेड": ["red"],
+    "लेबल": ["label"],
+    "লেবেল": ["label"],
+}
+
+_REVERSE_SYNONYMS = {}
+for k, syns in _SYNONYMS.items():
+    for s in syns:
+        _REVERSE_SYNONYMS.setdefault(s.lower(), []).append(k.lower())
+
 
 def _parse_transcript(transcript: str, items: List[models.InventoryItem]) -> dict:
     """Work out quantity, direction and which product was meant.
 
-    The previous implementation grabbed the first number and applied it to
-    whichever row happened to come back first from the database, ignoring the
-    words entirely -- so "sold 5 bread" added 5 milk.
+    Handles vernacular inputs (Hindi, Marathi, Bengali, Hinglish), maps Kirana
+    synonyms across scripts, and prevents misclassification on phrases like
+    'aa gaya' (added) or nouns like 'stock'.
     """
     text = transcript.lower().strip()
     words = re.findall(r"[a-z0-9\u0900-\u097f\u0980-\u09ff]+", text)
@@ -429,12 +552,20 @@ def _parse_transcript(transcript: str, items: List[models.InventoryItem]) -> dic
     if qty is None:
         qty = 1.0
 
-    direction = -1 if any(w in _SOLD_WORDS for w in words) else 1
-    if any(w in _ADDED_WORDS for w in words):
+    # Direction check: evaluate multi-word phrases first
+    if any(p in text for p in _ADDED_PHRASES):
+        direction = 1
+    elif any(p in text for p in _SOLD_PHRASES):
+        direction = -1
+    elif any(w in _SOLD_WORDS for w in words):
+        direction = -1
+    elif any(w in _ADDED_WORDS for w in words):
+        direction = 1
+    else:
         direction = 1
 
-    # Match the spoken words against product names. Compare against each word of
-    # the SKU too, so "bread" finds "Britannia Whole Wheat Bread".
+    # Match the spoken words against product names, including token fuzzy matching
+    # and cross-script vernacular synonyms.
     best_item = None
     best_score = 0.0
     for item in items:
@@ -443,13 +574,25 @@ def _parse_transcript(transcript: str, items: List[models.InventoryItem]) -> dic
             continue
         score = difflib.SequenceMatcher(None, text, name).ratio()
         name_tokens = re.findall(r"[a-z0-9\u0900-\u097f\u0980-\u09ff]+", name)
+
         for spoken in words:
-            if len(spoken) < 3 or spoken.isdigit() or spoken in _NUMBER_WORDS:
+            is_indic = any("\u0900" <= ch <= "\u09ff" for ch in spoken)
+            min_len = 2 if is_indic else 3
+            if len(spoken) < min_len or spoken.isdigit() or spoken in _NUMBER_WORDS:
                 continue
+
             if spoken in name:
                 score = max(score, 0.8)
+
             for token in name_tokens:
                 score = max(score, difflib.SequenceMatcher(None, spoken, token).ratio() * 0.95)
+
+            # Check cross-script synonym mapping (e.g. दूध -> milk, अमूल -> amul)
+            synonyms = _SYNONYMS.get(spoken, []) + _REVERSE_SYNONYMS.get(spoken, [])
+            for syn in synonyms:
+                if syn in name or any(syn == token for token in name_tokens):
+                    score = max(score, 0.92)
+
         if score > best_score:
             best_score, best_item = score, item
 
