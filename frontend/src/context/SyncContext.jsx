@@ -19,6 +19,11 @@ const SyncContext = createContext({
   closeSyncCenter: () => {},
 });
 
+// Maximum number of sales sent per batch request to the server.
+// Must stay <= 500 (the backend SaleBatchSyncRequest max_length limit).
+// 100 provides optimal balance of speed, payload size (~25-35KB), and resiliency.
+const BATCH_CHUNK_SIZE = 100;
+
 export function SyncProvider({ children }) {
   const { auth, vendor } = useAuth();
   const vendorId = vendor?.id || auth?.vendor_id || null;
@@ -66,6 +71,11 @@ export function SyncProvider({ children }) {
     setIsSyncing(true);
     setSyncError(null);
 
+    const allSyncedIds = [];
+    const allDuplicatesSkipped = [];
+    const allStockWarnings = [];
+    const allFailed = [];
+
     try {
       const pending = await offlineDb.getPendingSales(vendorId);
       if (!pending.length) {
@@ -73,7 +83,7 @@ export function SyncProvider({ children }) {
         setLastSyncedAt(now);
         await offlineDb.setMeta('last_synced_at', now);
         await refreshPending();
-        return { synced: 0, skipped: 0 };
+        return { synced: 0, skipped: 0, failed: 0, warnings: [] };
       }
 
       // Check real connectivity before flushing outbox
@@ -84,33 +94,45 @@ export function SyncProvider({ children }) {
       }
       setIsOnline(true);
 
-      // Prepare batch payload
-      const batchPayload = {
-        sales: pending.map((sale) => ({
-          offline_id: sale.offline_id,
-          payment_mode: sale.payment_mode,
-          customer_id: sale.customer_id,
-          note: sale.note,
-          items: sale.items.map((it) => ({
-            item_id: it.item_id,
-            sku_name: it.sku_name,
-            qty: it.qty,
-            unit_price: it.unit_price,
+      // Process pending sales in chunks of BATCH_CHUNK_SIZE (<= 500) to ensure:
+      // 1. Outages with 501+ queued sales do not violate backend max_length=500 limit (422)
+      // 2. Chunks are progressively marked synced in IndexedDB to preserve progress on flaky connections
+      for (let i = 0; i < pending.length; i += BATCH_CHUNK_SIZE) {
+        const chunk = pending.slice(i, i + BATCH_CHUNK_SIZE);
+        const batchPayload = {
+          sales: chunk.map((sale) => ({
+            offline_id: sale.offline_id,
+            payment_mode: sale.payment_mode,
+            customer_id: sale.customer_id,
+            note: sale.note,
+            items: sale.items.map((it) => ({
+              item_id: it.item_id,
+              sku_name: it.sku_name,
+              qty: it.qty,
+              unit_price: it.unit_price,
+            })),
+            created_at: sale.created_at,
           })),
-          created_at: sale.created_at,
-        })),
-      };
+        };
 
-      const res = await api.post('/sales/sync-batch', batchPayload);
-      const { synced_ids = [], duplicates_skipped = [], stock_warnings = [], failed = [] } = res.data;
+        const res = await api.post('/sales/sync-batch', batchPayload);
+        const { synced_ids = [], duplicates_skipped = [], stock_warnings = [], failed = [] } = res.data || {};
 
-      // Mark all processed IDs as synced (remove from pending outbox)
-      const toClear = [...synced_ids, ...duplicates_skipped];
-      await offlineDb.markSalesSynced(toClear);
+        // Immediately mark this chunk's processed IDs in IndexedDB so progress is saved
+        const toClear = [...synced_ids, ...duplicates_skipped];
+        if (toClear.length) {
+          await offlineDb.markSalesSynced(toClear);
+        }
 
-      // Mark any failed items with reasons
-      for (const item of failed) {
-        await offlineDb.markSaleFailed(item.offline_id, item.reason);
+        // Mark any failed items with reasons
+        for (const item of failed) {
+          await offlineDb.markSaleFailed(item.offline_id, item.reason);
+        }
+
+        allSyncedIds.push(...synced_ids);
+        allDuplicatesSkipped.push(...duplicates_skipped);
+        allStockWarnings.push(...stock_warnings);
+        allFailed.push(...failed);
       }
 
       const now = new Date().toISOString();
@@ -122,19 +144,19 @@ export function SyncProvider({ children }) {
       window.dispatchEvent(
         new CustomEvent('vendor360:synced', {
           detail: {
-            syncedCount: synced_ids.length,
-            duplicatesCount: duplicates_skipped.length,
-            failedCount: failed.length,
-            warnings: stock_warnings,
+            syncedCount: allSyncedIds.length,
+            duplicatesCount: allDuplicatesSkipped.length,
+            failedCount: allFailed.length,
+            warnings: allStockWarnings,
           },
         })
       );
 
       return {
-        synced: synced_ids.length,
-        skipped: duplicates_skipped.length,
-        failed: failed.length,
-        warnings: stock_warnings,
+        synced: allSyncedIds.length,
+        skipped: allDuplicatesSkipped.length,
+        failed: allFailed.length,
+        warnings: allStockWarnings,
       };
     } catch (err) {
       if (isNetworkError(err)) {
@@ -142,6 +164,25 @@ export function SyncProvider({ children }) {
       }
       const msg = err?.response?.data?.detail || err?.message || 'Sync failed';
       setSyncError(msg);
+
+      // If any chunk succeeded before failure, save timestamp and notify UI
+      if (allSyncedIds.length > 0 || allDuplicatesSkipped.length > 0) {
+        const now = new Date().toISOString();
+        setLastSyncedAt(now);
+        offlineDb.setMeta('last_synced_at', now).catch(() => {});
+        window.dispatchEvent(
+          new CustomEvent('vendor360:synced', {
+            detail: {
+              syncedCount: allSyncedIds.length,
+              duplicatesCount: allDuplicatesSkipped.length,
+              failedCount: allFailed.length,
+              warnings: allStockWarnings,
+            },
+          })
+        );
+      }
+
+      await refreshPending().catch(() => {});
       if (!silent) throw err;
     } finally {
       syncingRef.current = false;

@@ -111,3 +111,55 @@ def test_batch_sync_sales_and_idempotency(client, vendor, item):
     assert stock_retry == stock_after
     cust_retry = client.get(f"/api/customers/{customer['id']}", headers=headers).json()
     assert cust_retry["total_credit_balance"] == cust_after["total_credit_balance"]
+
+
+def test_batch_sync_501_sales_boundary_and_chunking_contract(client, vendor, item):
+    """FE7 Extreme Edge Contract Test:
+    
+    When an outage produces 501 offline sales:
+    1. Sending all 501 in a single unchunked request violates the 500 item boundary and returns 422.
+    2. Chunking the outbox (e.g. BATCH_CHUNK_SIZE = 100) allows all 501 sales to sync seamlessly across chunks.
+    """
+    headers, _ = vendor
+    now = datetime.now().isoformat()
+
+    sales_501 = [
+        {
+            "offline_id": f"off-stress-{i}-{uuid.uuid4()}",
+            "payment_mode": "cash",
+            "items": [{"item_id": item["id"], "qty": 1}],
+            "created_at": now,
+        }
+        for i in range(501)
+    ]
+
+    # 1. Unchunked single payload (501 items) must trigger 422 RequestValidationError
+    res_oversized = client.post(
+        "/api/sales/sync-batch",
+        headers=headers,
+        json={"sales": sales_501},
+    )
+    assert res_oversized.status_code == 422
+    err_body = str(res_oversized.json())
+    assert "500" in err_body or "too_long" in err_body
+
+    # 2. Client-chunked delivery (chunks of 100: 5x100 + 1x1)
+    chunk_size = 100
+    synced_total = 0
+    synced_ids = []
+
+    for start in range(0, len(sales_501), chunk_size):
+        chunk = sales_501[start : start + chunk_size]
+        res = client.post(
+            "/api/sales/sync-batch",
+            headers=headers,
+            json={"sales": chunk},
+        )
+        assert res.status_code == 200
+        data = res.json()
+        synced_total += data["synced_count"]
+        synced_ids.extend(data["synced_ids"])
+
+    assert synced_total == 501
+    assert len(synced_ids) == 501
+
