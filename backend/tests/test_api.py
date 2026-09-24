@@ -1688,3 +1688,29 @@ def test_old_events_are_pruned(client, vendor, db_session, monkeypatch):
     audit.record(db_session, audit.LOGIN_SUCCESS, vendor_id=vendor_id)
 
     assert "login.failed" not in _events(client, headers)
+
+
+def test_non_finite_floats_return_422_not_500(client, vendor):
+    """When a client submits non-finite floats like inf or -inf, Pydantic's
+    RequestValidationError must be sanitized so JSON serialization returns 422
+    rather than raising ValueError and converting to 500."""
+    headers, _ = vendor
+    # 1. Test positive infinity
+    res = client.post(
+        "/api/inventory",
+        content=b'{"sku_name": "Test item", "selling_price": 1e9999, "category": "snacks", "unit": "pcs"}',
+        headers={**headers, "Content-Type": "application/json"},
+    )
+    assert res.status_code == 422
+    body = res.json()
+    assert "detail" in body
+    assert any("selling_price" in str(err.get("loc", [])) for err in body["detail"])
+
+    # 2. Test negative infinity
+    res = client.post(
+        "/api/inventory",
+        content=b'{"sku_name": "Test item", "selling_price": -1e9999, "category": "snacks", "unit": "pcs"}',
+        headers={**headers, "Content-Type": "application/json"},
+    )
+    assert res.status_code == 422
+

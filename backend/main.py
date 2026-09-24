@@ -1,7 +1,10 @@
 import logging
+import math
 import uuid
 
 from fastapi import FastAPI, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -70,6 +73,43 @@ async def security_middleware(request: Request, call_next):
         )
 
     return response
+
+
+def _sanitize_for_json(obj):
+    """Recursively replace non-finite float values with JSON-compliant strings.
+
+    Standard JSON (RFC 8259) does not permit NaN or Infinity. When Pydantic echoes
+    invalid non-finite numbers in RequestValidationError, standard serializers crash with
+    ValueError: Out of range float values are not JSON compliant.
+    """
+    if isinstance(obj, float):
+        if math.isinf(obj):
+            return "Infinity" if obj > 0 else "-Infinity"
+        if math.isnan(obj):
+            return "NaN"
+        return obj
+    elif isinstance(obj, dict):
+        return {str(k): _sanitize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple, set)):
+        return [_sanitize_for_json(item) for item in obj]
+    return obj
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Sanitize validation errors to guarantee valid JSON serialization.
+
+    Pydantic echoes raw input values into the validation error detail. When non-finite
+    floats (inf, -inf, nan) are supplied, standard JSON serialization (allow_nan=False)
+    in Starlette/FastAPI raises a ValueError, erroneously converting a 422 client error
+    into a 500 server error. Sanitizing non-finite values preserves the 422 response.
+    """
+    raw_errors = exc.errors()
+    sanitized = _sanitize_for_json(raw_errors)
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": jsonable_encoder(sanitized)},
+    )
 
 
 @app.exception_handler(Exception)
