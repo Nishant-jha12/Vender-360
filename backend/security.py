@@ -30,16 +30,28 @@ def hash_otp(code: str) -> str:
     return crypto_utils.hash_otp(code, settings.SECRET_KEY)
 
 
+_INDIC_DIGITS = str.maketrans("०१२३४५६७८९০১২৩৪৫৬৭৮৯", "01234567890123456789")
+
+
 def verify_otp_code(submitted: str, stored_hash: Optional[str]) -> bool:
     # No live code means there is nothing to verify against -- not even in
     # DEBUG_OTP. Checking the fixed code first, as this used to, let the debug
     # shortcut sail past a code that had just been burned for too many wrong
     # guesses, so the attempt limit did nothing in the mode most runs use.
-    if not stored_hash:
+    if not stored_hash or not submitted:
         return False
-    if settings.DEBUG_OTP and hmac.compare_digest(submitted, settings.DEBUG_OTP_CODE):
-        return True
-    return hmac.compare_digest(hash_otp(submitted), stored_hash)
+
+    clean = submitted.translate(_INDIC_DIGITS).strip()
+    if settings.DEBUG_OTP:
+        try:
+            if hmac.compare_digest(
+                clean.encode("ascii"), settings.DEBUG_OTP_CODE.encode("ascii")
+            ):
+                return True
+        except (UnicodeEncodeError, AttributeError):
+            pass
+
+    return hmac.compare_digest(hash_otp(clean), stored_hash)
 
 
 def create_access_token(

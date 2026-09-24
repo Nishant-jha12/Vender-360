@@ -1714,3 +1714,37 @@ def test_non_finite_floats_return_422_not_500(client, vendor):
     )
     assert res.status_code == 422
 
+
+def test_devanagari_and_non_ascii_otp_handled_safely(client):
+    """Devanagari numerals (०-९) map to standard digits and non-ASCII inputs
+    do not cause 500 crashes via hmac.compare_digest TypeError in DEBUG_OTP mode."""
+    res = client.post(
+        "/api/auth/signup",
+        json={
+            "name": "Devanagari Test",
+            "username": "devanagari_user",
+            "email": "devanagari@example.com",
+            "phone": "+91 9123456780",
+            "password": "strong-password-123",
+        },
+    )
+    assert res.status_code == 200, res.text
+    challenge = res.json()["challenge_token"]
+
+    # 1. Non-digit Devanagari input returns 401, not 500
+    res_invalid = client.post(
+        "/api/auth/verify-otp",
+        json={"challenge_token": challenge, "otp": "नमस्ते"},
+    )
+    assert res_invalid.status_code == 401
+    assert res_invalid.json()["detail"] == "Incorrect verification code"
+
+    # 2. Devanagari digits matching DEBUG_OTP_CODE (१२३४५६ -> 123456) succeed with 200
+    res_valid = client.post(
+        "/api/auth/verify-otp",
+        json={"challenge_token": challenge, "otp": "१२३४५६"},
+    )
+    assert res_valid.status_code == 200
+    assert "token" in res_valid.json()
+
+
