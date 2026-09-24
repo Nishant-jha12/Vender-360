@@ -49,13 +49,22 @@ class Settings:
     # --- Security -----------------------------------------------------------
     # A generated fallback keeps development working, but it rotates on every
     # restart (which invalidates old tokens). Always set SECRET_KEY in .env.
-    SECRET_KEY: str = os.environ.get("SECRET_KEY") or secrets.token_urlsafe(48)
-    SECRET_KEY_IS_EPHEMERAL: bool = "SECRET_KEY" not in os.environ
+    SECRET_KEY_RAW: str = os.environ.get("SECRET_KEY", "").strip()
+    SECRET_KEY: str = SECRET_KEY_RAW or secrets.token_urlsafe(48)
+    SECRET_KEY_IS_EPHEMERAL: bool = not SECRET_KEY_RAW
     # Twelve hours, not a week: a stolen token is a live session, and there is
     # no revocation list -- only the per-vendor token epoch below.
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "720"))
     # The window between a correct password and the code that completes it.
     CHALLENGE_TOKEN_EXPIRE_MINUTES: int = int(os.environ.get("CHALLENGE_TOKEN_EXPIRE_MINUTES", "10"))
+    # Webhook signature secret for payment gateway callbacks (e.g. UPI soundbox / Razorpay)
+    WEBHOOK_SIGNING_SECRET: str = os.environ.get("WEBHOOK_SIGNING_SECRET", "")
+    # Default shop timezone for day boundaries & reporting
+    SHOP_TZ: str = os.environ.get("SHOP_TZ", "Asia/Kolkata")
+    # Trusted reverse proxy IPs for X-Forwarded-For rate limiting
+    TRUSTED_PROXY_IPS: list = [
+        ip.strip() for ip in os.environ.get("TRUSTED_PROXY_IPS", "").split(",") if ip.strip()
+    ]
 
     # --- OTP ----------------------------------------------------------------
     # There is no SMS provider wired up. DEBUG_OTP returns the generated code in
@@ -124,6 +133,8 @@ class Settings:
     SIGNUP_RATE_WINDOW_SECONDS: int = int(os.environ.get("SIGNUP_RATE_WINDOW_SECONDS", "3600"))
     OTP_RATE_LIMIT: int = int(os.environ.get("OTP_RATE_LIMIT", "15"))
     OTP_RATE_WINDOW_SECONDS: int = int(os.environ.get("OTP_RATE_WINDOW_SECONDS", "300"))
+    RESET_RATE_LIMIT: int = int(os.environ.get("RESET_RATE_LIMIT", "5"))
+    RESET_RATE_WINDOW_SECONDS: int = int(os.environ.get("RESET_RATE_WINDOW_SECONDS", "300"))
 
     # --- Account lockout ----------------------------------------------------
     # Rate limiting lives in memory and is emptied by every restart, so a deploy
@@ -183,13 +194,27 @@ def validate_for_production() -> list:
     """
     problems = []
 
+    _PLACEHOLDER_KEYS = {"change-me-before-you-deploy-anything"}
     if settings.SECRET_KEY_IS_EPHEMERAL:
         problems.append(
             "SECRET_KEY is unset, so it is regenerated on every restart. Tokens would "
             "not survive a deploy and the signing key is not under your control."
         )
+    elif (
+        settings.SECRET_KEY in _PLACEHOLDER_KEYS
+        or settings.SECRET_KEY.lower().startswith("change-me")
+    ):
+        problems.append("SECRET_KEY is the example placeholder; generate a real one.")
     elif len(settings.SECRET_KEY) < 32:
         problems.append("SECRET_KEY is shorter than 32 characters.")
+
+    if settings.ENABLE_DOCS:
+        problems.append("ENABLE_DOCS is on, which publishes the full API schema in production.")
+
+    if not settings.WEBHOOK_SIGNING_SECRET or len(settings.WEBHOOK_SIGNING_SECRET) < 16:
+        problems.append(
+            "WEBHOOK_SIGNING_SECRET is unset or shorter than 16 characters; UPI webhooks cannot be authenticated."
+        )
 
     if settings.DEBUG_OTP:
         problems.append(

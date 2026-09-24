@@ -162,7 +162,17 @@
     "signs_you_out": "Changing your password signs you out everywhere else.",
     "passwords_dont_match": "The two passwords do not match",
     "password_too_short": "Use at least 10 characters for your password",
-    "password_changed": "Password changed. Sign in with the new one."
+    "password_changed": "Password changed. Sign in with the new one.",
+    "create_account_title": "Create your account",
+    "create_account_subtitle": "Set up your store on Vendor360",
+    "your_name": "Your name",
+    "username": "Username",
+    "email": "Email",
+    "phone": "Phone",
+    "confirm_password": "Confirm password",
+    "already_registered": "Already registered?",
+    "at_least_10_chars": "At least 10 characters",
+    "phone_too_short": "Please enter a valid phone number (at least 10 digits)"
   },
   "account": {
     "title": "My Account",

@@ -15,6 +15,8 @@ export default function SyncCenterModal() {
     isSyncing,
     pendingCount,
     pendingSales,
+    failedCount = 0,
+    failedSales = [],
     lastSyncedAt,
     syncCenterOpen,
     syncError,
@@ -182,6 +184,39 @@ export default function SyncCenterModal() {
             ))
           )}
         </div>
+
+        {/* Failed Sales Section */}
+        {failedCount > 0 && (
+          <div className="mt-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-brand-danger">
+                Failed Bills ({failedCount})
+              </span>
+            </div>
+            <div className="mt-1.5 space-y-1.5 max-h-[16vh] overflow-y-auto pr-1">
+              {failedSales.map((sale) => (
+                <div
+                  key={sale.offline_id}
+                  className="p-2.5 rounded-2xl bg-brand-danger/10 border border-brand-danger/30 flex items-center justify-between gap-2"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-bold text-brand-danger truncate">
+                        {sale.items?.length || 0} items · {sale.payment_mode}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-brand-danger/80 truncate mt-0.5">
+                      {sale.sync_error || 'Validation error'}
+                    </p>
+                  </div>
+                  <span className="text-xs font-extrabold text-brand-danger font-inter shrink-0">
+                    {money(sale.total_amount)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Kirana Explainer Footer */}
         <div className="mt-4 pt-3 border-t border-brand-border/50 text-[11px] text-brand-muted bg-brand-primary/5 -mx-5 -mb-5 p-4 rounded-b-3xl">

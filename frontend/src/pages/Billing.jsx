@@ -183,6 +183,10 @@ export default function Billing() {
     if (!cart.length) return;
     setSubmitting(true);
 
+    const clientOfflineId = typeof crypto !== 'undefined' && crypto.randomUUID
+      ? `off-${crypto.randomUUID()}`
+      : `off-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
     const saleItems = cart.map((line) => ({
       item_id: line.item_id,
       sku_name: line.sku_name,
@@ -196,6 +200,8 @@ export default function Billing() {
     if (!isOnline) {
       try {
         const offlineSale = await offlineDb.saveOfflineSale({
+          offline_id: clientOfflineId,
+          vendor_id: vendor?.id,
           payment_mode: paymentMode,
           customer_id: customerId,
           customer_name: selectedCust?.name,
@@ -240,6 +246,7 @@ export default function Billing() {
     // Online submission attempt
     try {
       const res = await api.post('/sales', {
+        offline_id: clientOfflineId,
         payment_mode: paymentMode,
         customer_id: customerId,
         items: saleItems,
@@ -263,6 +270,8 @@ export default function Billing() {
       if (isNetworkError(err)) {
         try {
           const offlineSale = await offlineDb.saveOfflineSale({
+            offline_id: clientOfflineId,
+            vendor_id: vendor?.id,
             payment_mode: paymentMode,
             customer_id: customerId,
             customer_name: selectedCust?.name,

@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { api, clearStoredAuth, readStoredAuth, setUnauthorizedHandler, storeAuth } from '../lib/api';
+import { purgeForLogout } from '../lib/offlineDb';
 
 /**
  * Session state in one place.
@@ -18,6 +19,7 @@ export function AuthProvider({ children }) {
     clearStoredAuth();
     setAuth(null);
     setVendor(null);
+    purgeForLogout().catch(() => {});
   }, []);
 
   const login = useCallback((payload, remember) => {
@@ -35,6 +37,7 @@ export function AuthProvider({ children }) {
     setUnauthorizedHandler(() => {
       setAuth(null);
       setVendor(null);
+      purgeForLogout().catch(() => {});
     });
   }, []);
 

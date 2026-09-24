@@ -162,7 +162,17 @@
     "signs_you_out": "पासवर्ड बदलल्यावर तुम्ही इतर सर्व ठिकाणी साइन आउट व्हाल.",
     "passwords_dont_match": "दोन्ही पासवर्ड जुळत नाहीत",
     "password_too_short": "पासवर्डमध्ये किमान 10 अक्षरे ठेवा",
-    "password_changed": "पासवर्ड बदलला. नव्या पासवर्डने साइन इन करा."
+    "password_changed": "पासवर्ड बदलला. नव्या पासवर्डने साइन इन करा.",
+    "create_account_title": "खाते तयार करा",
+    "create_account_subtitle": "Vendor360 वर तुमचे दुकान सेट करा",
+    "your_name": "तुमचे नाव",
+    "username": "वापरकर्ता नाव",
+    "email": "ईमेल",
+    "phone": "फोन",
+    "confirm_password": "पासवर्ड पुष्टी करा",
+    "already_registered": "आधीच नोंदणीकृत आहात?",
+    "at_least_10_chars": "किमान 10 वर्ण",
+    "phone_too_short": "कृपया वैध फोन नंबर टाका (किमान 10 अंक)"
   },
   "account": {
     "title": "माझे खाते",

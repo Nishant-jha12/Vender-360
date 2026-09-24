@@ -42,10 +42,32 @@ class DeliveryResult:
         return self.delivered
 
 
+import urllib.parse
+
+
 def _fill(template: str, **values) -> str:
     out = template
     for key, value in values.items():
         out = out.replace("{" + key + "}", str(value if value is not None else ""))
+    return out
+
+
+def _fill_url(template: str, **values) -> str:
+    out = template
+    for key, value in values.items():
+        val_str = str(value if value is not None else "")
+        encoded = urllib.parse.quote_plus(val_str)
+        out = out.replace("{" + key + "}", encoded)
+    return out
+
+
+def _fill_body(template: str, **values) -> str:
+    out = template
+    for key, value in values.items():
+        val_str = str(value if value is not None else "")
+        # Safe JSON string escaping: json.dumps produces "escaped_str", so [1:-1] strips quotes
+        escaped = json.dumps(val_str)[1:-1]
+        out = out.replace("{" + key + "}", escaped)
     return out
 
 
@@ -55,8 +77,8 @@ def _send_http(to: str, message: str, code: str = "", link: str = "") -> Deliver
         return DeliveryResult(False, "NOTIFY_HTTP_URL is not set")
 
     fields = {"to": to, "message": message, "code": code, "link": link}
-    url = _fill(settings.NOTIFY_HTTP_URL, **fields)
-    body = _fill(settings.NOTIFY_HTTP_BODY, **fields).encode("utf-8")
+    url = _fill_url(settings.NOTIFY_HTTP_URL, **fields)
+    body = _fill_body(settings.NOTIFY_HTTP_BODY, **fields).encode("utf-8")
 
     request = urllib.request.Request(url, data=body, method=settings.NOTIFY_HTTP_METHOD)
     request.add_header("Content-Type", "application/json")

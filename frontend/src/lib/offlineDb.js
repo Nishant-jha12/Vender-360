@@ -8,7 +8,7 @@
  */
 
 const DB_NAME = 'vendor360_offline_db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbInstance = null;
 
@@ -20,6 +20,7 @@ function openDB() {
 
     request.onupgradeneeded = (event) => {
       const db = event.target.result;
+      const tx = event.target.transaction;
 
       // 1. Products Catalogue
       if (!db.objectStoreNames.contains('products')) {
@@ -40,10 +41,17 @@ function openDB() {
       }
 
       // 4. Sales Outbox
+      let outboxStore;
       if (!db.objectStoreNames.contains('sales_outbox')) {
-        const outboxStore = db.createObjectStore('sales_outbox', { keyPath: 'offline_id' });
+        outboxStore = db.createObjectStore('sales_outbox', { keyPath: 'offline_id' });
         outboxStore.createIndex('created_at', 'created_at', { unique: false });
         outboxStore.createIndex('synced_status', 'synced_status', { unique: false });
+        outboxStore.createIndex('vendor_id', 'vendor_id', { unique: false });
+      } else {
+        outboxStore = tx.objectStore('sales_outbox');
+        if (!outboxStore.indexNames.contains('vendor_id')) {
+          outboxStore.createIndex('vendor_id', 'vendor_id', { unique: false });
+        }
       }
 
       // 5. Metadata (last sync time, etc.)
@@ -174,6 +182,8 @@ export async function getCachedCustomers() {
 // Offline Sales & Outbox Management
 // --------------------------------------------------------------------------
 export async function saveOfflineSale({
+  offline_id = null,
+  vendor_id = null,
   payment_mode,
   customer_id = null,
   customer_name = null,
@@ -181,7 +191,7 @@ export async function saveOfflineSale({
   note = null,
 }) {
   const db = await openDB();
-  const offline_id = generateOfflineId();
+  const assignedOfflineId = offline_id || generateOfflineId();
   const createdAt = new Date().toISOString();
 
   const total_amount = items.reduce(
@@ -190,7 +200,8 @@ export async function saveOfflineSale({
   );
 
   const saleRecord = {
-    offline_id,
+    offline_id: assignedOfflineId,
+    vendor_id,
     payment_mode,
     customer_id,
     customer_name,
@@ -249,8 +260,9 @@ export async function saveOfflineSale({
 
     tx.oncomplete = () => {
       resolve({
-        id: offline_id,
-        offline_id,
+        id: assignedOfflineId,
+        offline_id: assignedOfflineId,
+        vendor_id,
         payment_mode,
         total_amount: saleRecord.total_amount,
         customer_id,
@@ -270,7 +282,7 @@ export async function saveOfflineSale({
   });
 }
 
-export async function getPendingSales() {
+export async function getPendingSales(vendorId = null) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction('sales_outbox', 'readonly');
@@ -278,7 +290,9 @@ export async function getPendingSales() {
     const req = store.getAll();
     req.onsuccess = () => {
       const all = req.result || [];
-      const pending = all.filter((s) => s.synced_status === 'pending');
+      const pending = all.filter(
+        (s) => s.synced_status === 'pending' && (!vendorId || s.vendor_id === vendorId)
+      );
       pending.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
       resolve(pending);
     };
@@ -286,8 +300,26 @@ export async function getPendingSales() {
   });
 }
 
-export async function getPendingCount() {
-  const pending = await getPendingSales();
+export async function getFailedSales(vendorId = null) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('sales_outbox', 'readonly');
+    const store = tx.objectStore('sales_outbox');
+    const req = store.getAll();
+    req.onsuccess = () => {
+      const all = req.result || [];
+      const failed = all.filter(
+        (s) => s.synced_status === 'failed' && (!vendorId || s.vendor_id === vendorId)
+      );
+      failed.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+      resolve(failed);
+    };
+    req.onerror = (e) => reject(e.target.error);
+  });
+}
+
+export async function getPendingCount(vendorId = null) {
+  const pending = await getPendingSales(vendorId);
   return pending.length;
 }
 
@@ -300,6 +332,38 @@ export async function markSalesSynced(syncedOfflineIds = []) {
     syncedOfflineIds.forEach((id) => {
       store.delete(id);
     });
+    tx.oncomplete = () => resolve();
+    tx.onerror = (e) => reject(e.target.error);
+  });
+}
+
+export async function markSaleFailed(offline_id, reason = 'Unknown sync error') {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('sales_outbox', 'readwrite');
+    const store = tx.objectStore('sales_outbox');
+    const req = store.get(offline_id);
+    req.onsuccess = () => {
+      const sale = req.result;
+      if (sale) {
+        sale.synced_status = 'failed';
+        sale.sync_error = reason;
+        store.put(sale);
+      }
+    };
+    tx.oncomplete = () => resolve();
+    tx.onerror = (e) => reject(e.target.error);
+  });
+}
+
+export async function purgeForLogout() {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(['products', 'frequent', 'customers', 'meta'], 'readwrite');
+    tx.objectStore('products').clear();
+    tx.objectStore('frequent').clear();
+    tx.objectStore('customers').clear();
+    tx.objectStore('meta').clear();
     tx.oncomplete = () => resolve();
     tx.onerror = (e) => reject(e.target.error);
   });

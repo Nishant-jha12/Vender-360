@@ -156,11 +156,11 @@ export default function CheckoutModal({
       const es = new EventSource(sseUrl);
       sseRef.current = es;
 
-      es.onmessage = (event) => {
+      const handleSseMessage = (event) => {
         try {
           const data = JSON.parse(event.data);
           if (
-            data.event === 'payment_completed' &&
+            (data.event === 'payment_completed' || event.type === 'payment_completed') &&
             data.txn_ref === currentTxnRef &&
             data.status === 'completed'
           ) {
@@ -170,6 +170,9 @@ export default function CheckoutModal({
           // ignore non-json keepalives
         }
       };
+
+      es.addEventListener('payment_completed', handleSseMessage);
+      es.onmessage = handleSseMessage;
 
       es.onerror = () => {
         // SSE closed or errored, fallback polling will take over
@@ -515,25 +518,27 @@ export default function CheckoutModal({
 
             {/* Action Buttons & Simulation */}
             <div className="space-y-2">
-              {/* ⚡ 1-Tap Demo Simulation Button */}
-              <button
-                type="button"
-                onClick={handleSimulatePayment}
-                disabled={!intent?.txn_ref || simulating}
-                className="w-full py-2.5 rounded-xl border border-brand-primary/40 bg-brand-primary/10 text-brand-primary font-bold text-xs flex items-center justify-center gap-2 hover:bg-brand-primary/20 active:scale-[0.99] transition-all disabled:opacity-50"
-              >
-                {simulating ? (
-                  <>
-                    <Loader2 size={15} className="animate-spin" />
-                    <span>{t('soundbox.simulating', 'Simulating customer UPI transfer...')}</span>
-                  </>
-                ) : (
-                  <>
-                    <Zap size={15} className="text-brand-primary fill-brand-primary" />
-                    <span>{t('soundbox.simulate_button', '⚡ Simulate Customer Payment (1-Tap Demo)')}</span>
-                  </>
-                )}
-              </button>
+              {/* ⚡ 1-Tap Demo Simulation Button (Dev Only) */}
+              {import.meta.env.DEV && (
+                <button
+                  type="button"
+                  onClick={handleSimulatePayment}
+                  disabled={!intent?.txn_ref || simulating}
+                  className="w-full py-2.5 rounded-xl border border-brand-primary/40 bg-brand-primary/10 text-brand-primary font-bold text-xs flex items-center justify-center gap-2 hover:bg-brand-primary/20 active:scale-[0.99] transition-all disabled:opacity-50"
+                >
+                  {simulating ? (
+                    <>
+                      <Loader2 size={15} className="animate-spin" />
+                      <span>{t('soundbox.simulating', 'Simulating customer UPI transfer...')}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Zap size={15} className="text-brand-primary fill-brand-primary" />
+                      <span>{t('soundbox.simulate_button', '⚡ Simulate Customer Payment (1-Tap Demo)')}</span>
+                    </>
+                  )}
+                </button>
+              )}
 
               {intent?.upi_url && (
                 <a

@@ -120,8 +120,8 @@ _GS1_PREFIXES = [
 
 
 def normalise(code: Optional[str]) -> str:
-    """Digits only. Scanners and people both add spaces and dashes."""
-    return "".join(ch for ch in (code or "") if ch.isdigit())
+    """ASCII decimal digits only ('0'-'9'). Scanners and people both add spaces and dashes."""
+    return "".join(ch for ch in (code or "") if "0" <= ch <= "9")
 
 
 def check_digit_ok(code: str) -> Optional[bool]:

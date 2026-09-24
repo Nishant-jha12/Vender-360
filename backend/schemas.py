@@ -5,7 +5,7 @@ raw SQLAlchemy objects, which leaked internal columns (vendor_id, sync_status)
 straight to the browser.
 """
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -205,17 +205,17 @@ class InventoryItemBase(BaseModel):
     sku_name: str = Field(min_length=1, max_length=160)
     category: Optional[str] = Field(default="General", max_length=80)
     unit: Optional[str] = Field(default="unit", max_length=30)
-    current_qty: float = Field(default=0, ge=0)
-    reorder_point: float = Field(default=10, ge=0)
-    cost_price: float = Field(default=0, ge=0)
-    selling_price: float = Field(default=0, ge=0)
+    current_qty: float = Field(default=0, ge=0, allow_inf_nan=False)
+    reorder_point: float = Field(default=10, ge=0, allow_inf_nan=False)
+    cost_price: float = Field(default=0, ge=0, allow_inf_nan=False)
+    selling_price: float = Field(default=0, ge=0, allow_inf_nan=False)
     expiry_date: Optional[datetime] = None
     mfg_date: Optional[datetime] = None
     barcode: Optional[str] = Field(default=None, max_length=64)
     pack_type: str = Field(default="loose")
-    units_per_pack: float = Field(default=1, gt=0)
+    units_per_pack: float = Field(default=1, gt=0, allow_inf_nan=False)
     hsn_code: Optional[str] = Field(default=None, max_length=12)
-    gst_rate: float = Field(default=0, ge=0, le=100)
+    gst_rate: float = Field(default=0, ge=0, le=100, allow_inf_nan=False)
 
     _naive_dates = field_validator("expiry_date", "mfg_date")(as_naive_utc)
 
@@ -232,8 +232,34 @@ class InventoryItemCreate(InventoryItemBase):
     pass
 
 
-class InventoryItemUpdate(InventoryItemBase):
-    pass
+class InventoryItemUpdate(BaseModel):
+    sku_name: Optional[str] = Field(default=None, min_length=1, max_length=160)
+    category: Optional[str] = Field(default=None, max_length=80)
+    unit: Optional[str] = Field(default=None, max_length=30)
+    current_qty: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
+    reorder_point: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
+    cost_price: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
+    selling_price: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
+    expiry_date: Optional[datetime] = None
+    mfg_date: Optional[datetime] = None
+    barcode: Optional[str] = Field(default=None, max_length=64)
+    pack_type: Optional[str] = None
+    units_per_pack: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
+    hsn_code: Optional[str] = Field(default=None, max_length=12)
+    gst_rate: Optional[float] = Field(default=None, ge=0, le=100, allow_inf_nan=False)
+    last_updated: Optional[datetime] = None
+
+    _naive_dates = field_validator("expiry_date", "mfg_date", "last_updated")(as_naive_utc)
+
+    @field_validator("pack_type")
+    @classmethod
+    def known_pack_type(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        cleaned = v.strip().lower()
+        if cleaned not in ("loose", "carton"):
+            raise ValueError("pack_type must be 'loose' or 'carton'")
+        return cleaned
 
 
 class InventoryItemResponse(BaseModel):
@@ -259,7 +285,7 @@ class InventoryItemResponse(BaseModel):
 
 
 class StockAdjustRequest(BaseModel):
-    qty_change: float
+    qty_change: float = Field(allow_inf_nan=False)
     reason: Optional[str] = Field(default="Manual adjustment", max_length=200)
 
     @field_validator("qty_change")
@@ -303,8 +329,8 @@ class ExpiringItemResponse(InventoryItemResponse):
 class SaleLineRequest(BaseModel):
     item_id: Optional[str] = None
     sku_name: Optional[str] = Field(default=None, max_length=160)
-    qty: float = Field(gt=0)
-    unit_price: Optional[float] = Field(default=None, ge=0)
+    qty: float = Field(gt=0, allow_inf_nan=False)
+    unit_price: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 class SaleCreateRequest(BaseModel):
@@ -314,6 +340,8 @@ class SaleCreateRequest(BaseModel):
     note: Optional[str] = Field(default=None, max_length=200)
     offline_id: Optional[str] = Field(default=None, max_length=100)
     created_at: Optional[datetime] = None
+
+    _naive_dates = field_validator("created_at")(as_naive_utc)
 
     @field_validator("payment_mode")
     @classmethod
@@ -332,6 +360,8 @@ class SaleSyncItem(BaseModel):
     note: Optional[str] = Field(default=None, max_length=200)
     created_at: Optional[datetime] = None
 
+    _naive_dates = field_validator("created_at")(as_naive_utc)
+
     @field_validator("payment_mode")
     @classmethod
     def known_mode(cls, v: str) -> str:
@@ -345,10 +375,16 @@ class SaleBatchSyncRequest(BaseModel):
     sales: List[SaleSyncItem] = Field(min_length=1, max_length=500)
 
 
+class SaleBatchSyncFailedItem(BaseModel):
+    offline_id: str
+    reason: str
+
+
 class SaleBatchSyncResponse(BaseModel):
     synced_ids: List[str]
     duplicates_skipped: List[str]
     stock_warnings: List[str]
+    failed: List[SaleBatchSyncFailedItem] = []
     synced_count: int
 
 
@@ -379,7 +415,7 @@ class SaleResponse(BaseModel):
 # UPI & Soundbox Checkout
 # --------------------------------------------------------------------------
 class UpiIntentCreateRequest(BaseModel):
-    amount: float = Field(gt=0, le=100000)
+    amount: float = Field(gt=0, le=100000, allow_inf_nan=False)
     note: Optional[str] = Field(default=None, max_length=80)
     customer_id: Optional[str] = None
 
@@ -410,8 +446,8 @@ class UpiSimulationRequest(BaseModel):
 
 class UpiWebhookPayload(BaseModel):
     txn_ref: str
-    amount: float
-    status: str = "completed"
+    amount: float = Field(gt=0, allow_inf_nan=False)
+    status: Literal["completed", "failed", "expired"] = "completed"
     bank_ref_num: Optional[str] = None
     payer_vpa: Optional[str] = None
     payer_name: Optional[str] = None
@@ -423,11 +459,11 @@ class UpiWebhookPayload(BaseModel):
 class CustomerCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     phone: Optional[str] = Field(default=None, max_length=20)
-    initial_credit_balance: float = Field(default=0.0, ge=0)
+    initial_credit_balance: float = Field(default=0.0, ge=0, allow_inf_nan=False)
 
 
 class TransactionCreate(BaseModel):
-    amount: float = Field(gt=0)
+    amount: float = Field(gt=0, allow_inf_nan=False)
     transaction_type: str
     notes: Optional[str] = Field(default=None, max_length=200)
 
@@ -471,7 +507,7 @@ class IntakeScanRequest(BaseModel):
     barcode: Optional[str] = Field(default=None, max_length=64)
     item_id: Optional[str] = None
     # Loose items default to one unit per scan; cartons to one case.
-    packs: float = Field(default=1, gt=0)
+    packs: float = Field(default=1, gt=0, allow_inf_nan=False)
 
     @field_validator("barcode")
     @classmethod
@@ -485,11 +521,11 @@ class IntakeConfirmRequest(BaseModel):
     line they want to correct before it is written."""
 
     item_id: str
-    packs: float = Field(default=1, gt=0)
-    units_per_pack: Optional[float] = Field(default=None, gt=0)
-    unit_cost: Optional[float] = Field(default=None, ge=0)
-    unit_price: Optional[float] = Field(default=None, ge=0)
-    gst_rate: Optional[float] = Field(default=None, ge=0, le=100)
+    packs: float = Field(default=1, gt=0, allow_inf_nan=False)
+    units_per_pack: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
+    unit_cost: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
+    unit_price: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
+    gst_rate: Optional[float] = Field(default=None, ge=0, le=100, allow_inf_nan=False)
     hsn_code: Optional[str] = Field(default=None, max_length=12)
     batch_no: Optional[str] = Field(default=None, max_length=40)
     mfg_date: Optional[datetime] = None

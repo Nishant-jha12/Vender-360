@@ -16,7 +16,7 @@ import secrets
 import time
 from typing import Optional, Tuple
 
-PBKDF2_ITERATIONS = 240_000
+PBKDF2_ITERATIONS = 600_000
 ALGORITHM_TAG = "pbkdf2_sha256"
 
 
@@ -48,7 +48,9 @@ def verify_password(password: str, stored: Optional[str]) -> Tuple[bool, bool]:
             )
         except (ValueError, TypeError):
             return False, False
-        return hmac.compare_digest(digest.hex(), expected_hex), False
+        is_valid = hmac.compare_digest(digest.hex(), expected_hex)
+        needs_rehash = is_valid and (int(iterations) < PBKDF2_ITERATIONS)
+        return is_valid, needs_rehash
 
     if len(stored) == 64:  # legacy bare SHA-256 hex
         legacy = hashlib.sha256(password.encode("utf-8")).hexdigest()
@@ -124,6 +126,11 @@ def create_access_token(
 
 def decode_access_token(token: str, secret: str, *, purpose: str = PURPOSE_ACCESS) -> dict:
     """Verify signature, purpose and expiry. Raises ValueError on any problem."""
+    try:
+        token.encode("ascii")
+    except (UnicodeEncodeError, AttributeError):
+        raise ValueError("Malformed token: non-ASCII characters")
+
     parts = token.split(".")
     if len(parts) != 3:
         raise ValueError("Malformed token")

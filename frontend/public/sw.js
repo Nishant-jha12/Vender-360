@@ -5,7 +5,7 @@
  * ensuring the app opens and functions without network connectivity.
  */
 
-const CACHE_NAME = 'vendor360-shell-v1';
+const CACHE_NAME = 'vendor360-shell-v2';
 
 const PRECACHE_URLS = [
   '/',
@@ -42,8 +42,8 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Skip non-GET requests and browser extensions
-  if (request.method !== 'GET' || url.protocol.startsWith('chrome-extension')) {
+  // Skip non-GET requests and non-http(s) protocols
+  if (request.method !== 'GET' || !url.protocol.startsWith('http')) {
     return;
   }
 
@@ -63,30 +63,37 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Only cache same-origin resources
+  const isSameOrigin = url.origin === self.location.origin;
+
   // HTML Navigation: Network-first with cache fallback to /index.html
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+          if (response && response.status === 200 && isSameOrigin) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+          }
           return response;
         })
         .catch(async () => {
           const cached = await caches.match(request);
           if (cached) return cached;
-          return caches.match('/index.html') || caches.match('/');
+          const indexCached = await caches.match('/index.html');
+          if (indexCached) return indexCached;
+          return await caches.match('/');
         })
     );
     return;
   }
 
-  // Static Assets (JS, CSS, images, fonts): Stale-while-revalidate
+  // Static Assets (JS, CSS, images, fonts): Stale-while-revalidate for same-origin
   event.respondWith(
     caches.match(request).then((cachedResponse) => {
       const fetchPromise = fetch(request)
         .then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
+          if (networkResponse && networkResponse.status === 200 && isSameOrigin) {
             const responseToCache = networkResponse.clone();
             caches.open(CACHE_NAME).then((cache) => {
               cache.put(request, responseToCache);

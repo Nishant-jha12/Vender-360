@@ -69,8 +69,15 @@ def test_upi_intent_lifecycle_and_simulation(client, vendor):
     assert any(p["txn_ref"] == txn_ref for p in recent_list)
 
 
+import hashlib
+import hmac
+import json
+from config import settings
+
+
 def test_upi_webhook_reconciliation(client, vendor):
     headers, _ = vendor
+    settings.WEBHOOK_SIGNING_SECRET = "secret-key-for-tests-12345"
 
     # Setup UPI ID
     client.put(
@@ -88,17 +95,45 @@ def test_upi_webhook_reconciliation(client, vendor):
 
     txn_ref = intent["txn_ref"]
 
-    # Trigger webhook
+    payload_data = {
+        "txn_ref": txn_ref,
+        "amount": 150.0,
+        "status": "completed",
+        "bank_ref_num": "498273615201",
+        "payer_name": "Deepak Patel",
+        "payer_vpa": "deepak@paytm",
+    }
+    raw_payload = json.dumps(payload_data).encode("utf-8")
+
+    # 1. Unsigned webhook must return 401
+    unsigned_res = client.post("/api/checkout/webhook", content=raw_payload, headers={"content-type": "application/json"})
+    assert unsigned_res.status_code == 401
+
+    # 2. Bad signature must return 401
+    bad_sig_res = client.post(
+        "/api/checkout/webhook",
+        content=raw_payload,
+        headers={"x-webhook-signature": "invalid-sig", "content-type": "application/json"},
+    )
+    assert bad_sig_res.status_code == 401
+
+    # 3. Mismatched amount must return 400
+    mismatch_data = dict(payload_data, amount=200.0)
+    mismatch_raw = json.dumps(mismatch_data).encode("utf-8")
+    mismatch_sig = hmac.new(settings.WEBHOOK_SIGNING_SECRET.encode(), mismatch_raw, hashlib.sha256).hexdigest()
+    mismatch_res = client.post(
+        "/api/checkout/webhook",
+        content=mismatch_raw,
+        headers={"x-webhook-signature": mismatch_sig, "content-type": "application/json"},
+    )
+    assert mismatch_res.status_code == 400
+
+    # 4. Valid signature & matching amount succeeds
+    valid_sig = hmac.new(settings.WEBHOOK_SIGNING_SECRET.encode(), raw_payload, hashlib.sha256).hexdigest()
     webhook_res = client.post(
         "/api/checkout/webhook",
-        json={
-            "txn_ref": txn_ref,
-            "amount": 150.0,
-            "status": "completed",
-            "bank_ref_num": "498273615201",
-            "payer_name": "Deepak Patel",
-            "payer_vpa": "deepak@paytm",
-        },
+        content=raw_payload,
+        headers={"x-webhook-signature": valid_sig, "content-type": "application/json"},
     )
     assert webhook_res.status_code == 200
 

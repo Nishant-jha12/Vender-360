@@ -3,7 +3,7 @@ import string
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from database import Base
@@ -156,6 +156,9 @@ class Sale(Base):
     """
 
     __tablename__ = "sales"
+    __table_args__ = (
+        UniqueConstraint("vendor_id", "offline_id", name="uq_sales_vendor_offline_id"),
+    )
     id = Column(String, primary_key=True, default=generate_uuid)
     vendor_id = Column(String, ForeignKey("vendors.id"), index=True)
     customer_id = Column(String, ForeignKey("customers.id"), nullable=True, index=True)

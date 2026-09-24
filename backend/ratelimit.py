@@ -58,16 +58,16 @@ def hit(key: str, limit: int, window_seconds: int) -> Tuple[bool, int]:
 def client_key(request: Optional[Request]) -> str:
     """Best available identifier for the caller.
 
-    X-Forwarded-For is only consulted for its first entry and only matters when
-    something in front of the app sets it; a client can forge the header, so
-    this is a rate-limit hint, never an identity.
+    X-Forwarded-For is only trusted if the immediate peer (request.client.host)
+    is configured in settings.TRUSTED_PROXY_IPS.
     """
     if request is None:
         return "unknown"
+    client_host = request.client.host if request.client else "unknown"
     forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
+    if forwarded and client_host in settings.TRUSTED_PROXY_IPS:
         return forwarded.split(",")[0].strip()[:64]
-    return (request.client.host if request.client else "unknown")[:64]
+    return client_host[:64]
 
 
 def enforce(

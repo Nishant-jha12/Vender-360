@@ -396,7 +396,6 @@ function ItemFormModal({ item, onClose, onSaved }) {
         sku_name: form.sku_name.trim(),
         category: form.category?.trim() || 'General',
         unit: form.unit?.trim() || 'unit',
-        current_qty: parseFloat(form.current_qty) || 0,
         reorder_point: parseFloat(form.reorder_point) || 0,
         cost_price: parseFloat(form.cost_price) || 0,
         selling_price: parseFloat(form.selling_price) || 0,
@@ -408,8 +407,13 @@ function ItemFormModal({ item, onClose, onSaved }) {
         hsn_code: form.hsn_code?.trim() || null,
         gst_rate: parseFloat(form.gst_rate) || 0,
       };
-      if (isNew) await api.post('/inventory', payload);
-      else await api.put(`/inventory/${item.id}`, payload);
+      if (isNew) {
+        payload.current_qty = parseFloat(form.current_qty) || 0;
+        await api.post('/inventory', payload);
+      } else {
+        if (item.last_updated) payload.last_updated = item.last_updated;
+        await api.put(`/inventory/${item.id}`, payload);
+      }
 
       toast.success(isNew ? `${payload.sku_name} added` : `${payload.sku_name} updated`);
       onSaved();
@@ -457,8 +461,19 @@ function ItemFormModal({ item, onClose, onSaved }) {
         )}
 
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Quantity in stock">
-            <input type="number" step="any" min="0" value={form.current_qty} onChange={set('current_qty')} className={inputClass} />
+          <Field
+            label="Quantity in stock"
+            hint={!isNew ? "To change shelf stock, use the '+ Adjust' button" : undefined}
+          >
+            <input
+              type="number"
+              step="any"
+              min="0"
+              disabled={!isNew}
+              value={form.current_qty}
+              onChange={set('current_qty')}
+              className={`${inputClass} ${!isNew ? 'opacity-60 cursor-not-allowed bg-brand-bg' : ''}`}
+            />
           </Field>
           <Field label="Reorder point">
             <input type="number" step="any" min="0" value={form.reorder_point} onChange={set('reorder_point')} className={inputClass} />

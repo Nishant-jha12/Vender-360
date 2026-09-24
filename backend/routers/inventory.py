@@ -98,17 +98,23 @@ def expiring_soon(
     # invisible behind the newer one's date.
     results = []
     for batch, item in stock.expiring_batches(db, vendor.id, threshold):
+        is_expired = batch.expiry_date < now
         days_left = max(0, (batch.expiry_date - now).days)
-        urgency = "critical" if days_left <= 2 else "warning"
+        urgency = "expired" if is_expired else ("critical" if days_left <= 2 else "warning")
 
         # Clear it at a discount rather than write it off: anything above cost
         # beats throwing it away. The steeper cut goes to the tighter deadline.
-        discount_pct = 30 if days_left <= 1 else 20 if days_left <= 2 else 10
-        suggested = round((item.selling_price or 0) * (1 - discount_pct / 100), 2)
-        # Never suggest selling below what this lot cost.
+        # If already past expiry date, do not suggest selling it at a discount.
         lot_cost = batch.unit_cost or item.cost_price or 0
-        if lot_cost and suggested < lot_cost:
-            suggested = round(lot_cost, 2)
+        if is_expired:
+            discount_pct = 0
+            suggested = 0.0
+        else:
+            discount_pct = 30 if days_left <= 1 else 20 if days_left <= 2 else 10
+            suggested = round((item.selling_price or 0) * (1 - discount_pct / 100), 2)
+            # Never suggest selling below what this lot cost.
+            if lot_cost and suggested < lot_cost:
+                suggested = round(lot_cost, 2)
 
         payload = schemas.InventoryItemResponse.model_validate(item).model_dump()
         payload.update(
@@ -255,7 +261,17 @@ def update_item(
     db: Session = Depends(get_db),
 ):
     item = _owned_item(item_id, vendor, db)
-    fields = req.model_dump()
+
+    # Optimistic concurrency check: if client sent last_updated and server has newer timestamp
+    if req.last_updated and item.last_updated:
+        if (item.last_updated - req.last_updated).total_seconds() > 0.001:
+            raise HTTPException(
+                status_code=409,
+                detail="Item was modified by another operation. Please refresh before saving.",
+            )
+
+    fields = req.model_dump(exclude_unset=True)
+    fields.pop("last_updated", None)
     requested_qty = fields.pop("current_qty", None)
     requested_expiry = fields.get("expiry_date")
     had_expiry = item.expiry_date
@@ -267,16 +283,12 @@ def update_item(
     # alone -- written there, the next reconcile would overwrite it from the
     # lots. This runs before any quantity change so that the common case, one
     # lot, ends up with the whole shelf carrying the date that was typed.
-    if requested_expiry != had_expiry:
+    if "expiry_date" in fields and requested_expiry != had_expiry:
         soonest = stock.open_batches(db, item)
         if soonest:
             soonest[0].expiry_date = requested_expiry
 
-    # Editing the quantity on the product is a correction to the shelf, so it
-    # moves lots rather than overwriting the total they add up to. Added units
-    # take the same date, which lets them merge into the lot above instead of
-    # leaving a second, near-identical row behind after every edit.
-    if requested_qty is not None:
+    if requested_qty is not None and requested_qty != (item.current_qty or 0.0):
         delta = round(requested_qty - (item.current_qty or 0.0), 3)
         if delta > 0:
             stock.add_stock(
@@ -353,16 +365,45 @@ class VoiceEntryRequest(BaseModel):
     qty: Optional[float] = None
 
 
-# Intent keywords, including the Roman-script Hindi/Marathi a phone's speech
-# recogniser typically returns.
-_SOLD_WORDS = {"sold", "sell", "bika", "bike", "becha", "bechi", "gaya", "vikla", "vikale", "minus", "less"}
-_ADDED_WORDS = {"added", "add", "received", "receive", "aaya", "aayi", "liya", "kharida", "stock", "plus", "more", "aale"}
+# Intent keywords, including Roman, Devanagari, and Bengali scripts
+_SOLD_WORDS = {
+    "sold", "sell", "minus", "less",
+    # Hindi/Marathi (Roman & Devanagari)
+    "bika", "bike", "becha", "bechi", "gaya", "vikla", "vikale", "kam", "kami",
+    "बेचा", "बिका", "बेची", "विकला", "गेला", "कमी",
+    # Bengali (Roman & Script)
+    "bikri", "bechechi", "geche", "biklo",
+    "বিক্রি", "বেচেছি", "গেছে", "বিকা", "বিকলো",
+}
+
+_ADDED_WORDS = {
+    "added", "add", "received", "receive", "stock", "plus", "more",
+    # Hindi/Marathi (Roman & Devanagari)
+    "aaya", "aayi", "liya", "kharida", "aale", "milale",
+    "आया", "आले", "खरीदा", "जोड़ा", "मिळाले",
+    # Bengali (Roman & Script)
+    "eseche", "jog", "kinechi", "peyechi",
+    "এসেছে", "যোগ", "কিনেছি", "পেয়েছি",
+}
+
+_INDIC_DIGITS = {
+    '०': '0', '१': '1', '२': '2', '३': '3', '४': '4', '५': '5', '६': '6', '७': '7', '८': '8', '९': '9',
+    '০': '0', '১': '1', '২': '2', '৩': '3', '৪': '4', '৫': '5', '৬': '6', '৭': '7', '৮': '8', '৯': '9',
+}
 
 _NUMBER_WORDS = {
+    # English & Roman Hindi/Marathi
     "ek": 1, "one": 1, "do": 2, "two": 2, "teen": 3, "three": 3, "char": 4, "four": 4,
     "panch": 5, "paanch": 5, "five": 5, "chah": 6, "chhah": 6, "six": 6, "saat": 7,
     "seven": 7, "aath": 8, "eight": 8, "nau": 9, "nine": 9, "das": 10, "dus": 10,
     "ten": 10, "bees": 20, "twenty": 20, "pachas": 50, "fifty": 50, "sau": 100, "hundred": 100,
+    # Devanagari words
+    "एक": 1, "दोन": 2, "दो": 2, "तीन": 3, "चार": 4, "पांच": 5, "पाच": 5,
+    "छह": 6, "सहा": 6, "सात": 7, "आठ": 8, "नौ": 9, "नऊ": 9, "दस": 10, "दहा": 10,
+    "वीस": 20, "बीस": 20, "पचास": 50, "पन्नास": 50, "शंभर": 100, "सौ": 100,
+    # Bengali words
+    "এক": 1, "দুই": 2, "তিন": 3, "চার": 4, "পাঁচ": 5, "ছয়": 6, "সাত": 7,
+    "আট": 8, "নয়": 9, "দশ": 10, "কুড়ি": 20, "পঞ্চাশ": 50, "একশো": 100,
 }
 
 
@@ -374,12 +415,13 @@ def _parse_transcript(transcript: str, items: List[models.InventoryItem]) -> dic
     words entirely -- so "sold 5 bread" added 5 milk.
     """
     text = transcript.lower().strip()
-    words = re.findall(r"[a-z0-9ऀ-ॿ]+", text)
+    words = re.findall(r"[a-z0-9\u0900-\u097f\u0980-\u09ff]+", text)
 
     qty = None
     for word in words:
-        if word.isdigit():
-            qty = float(word)
+        normalized_num = "".join(_INDIC_DIGITS.get(ch, ch) for ch in word)
+        if normalized_num.isdigit():
+            qty = float(normalized_num)
             break
         if word in _NUMBER_WORDS:
             qty = float(_NUMBER_WORDS[word])
@@ -400,9 +442,9 @@ def _parse_transcript(transcript: str, items: List[models.InventoryItem]) -> dic
         if not name:
             continue
         score = difflib.SequenceMatcher(None, text, name).ratio()
-        name_tokens = re.findall(r"[a-z0-9ऀ-ॿ]+", name)
+        name_tokens = re.findall(r"[a-z0-9\u0900-\u097f\u0980-\u09ff]+", name)
         for spoken in words:
-            if len(spoken) < 3 or spoken.isdigit():
+            if len(spoken) < 3 or spoken.isdigit() or spoken in _NUMBER_WORDS:
                 continue
             if spoken in name:
                 score = max(score, 0.8)

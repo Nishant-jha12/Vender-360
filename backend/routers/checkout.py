@@ -7,6 +7,8 @@ from collections import defaultdict
 from datetime import datetime
 import io
 import json
+import hashlib
+import hmac
 import secrets
 from typing import Dict, List, Optional, Set
 from urllib.parse import quote
@@ -15,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from config import settings
 from database import get_db
 import models
 import schemas
@@ -137,6 +140,18 @@ def create_upi_intent(
             detail="Add your UPI ID under Account before collecting UPI payments.",
         )
 
+    if req.customer_id:
+        customer = (
+            db.query(models.Customer)
+            .filter(
+                models.Customer.id == req.customer_id,
+                models.Customer.vendor_id == vendor.id,
+            )
+            .first()
+        )
+        if not customer:
+            raise HTTPException(status_code=404, detail="Customer not found")
+
     txn_ref = _generate_txn_ref()
     note_text = req.note or "Counter billing"
 
@@ -204,6 +219,12 @@ async def simulate_payment(
     Instantly reconciles the transaction, generates a bank UTR reference,
     and broadcasts the event to trigger the in-app soundbox voice announcement.
     """
+    if not settings.DEMO_MODE:
+        raise HTTPException(
+            status_code=403,
+            detail="Payment simulation is disabled outside DEMO_MODE",
+        )
+
     payment = (
         db.query(models.UpiPayment)
         .filter(
@@ -261,10 +282,25 @@ async def simulate_payment(
 
 @router.post("/webhook")
 async def payment_webhook(
-    payload: schemas.UpiWebhookPayload,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     """Generic payment gateway webhook (Razorpay / Cashfree / Setu / Paytm UPI)."""
+    raw = await request.body()
+    sig = request.headers.get("x-webhook-signature", "")
+
+    if not settings.WEBHOOK_SIGNING_SECRET:
+        raise HTTPException(status_code=500, detail="Webhook signing secret not configured")
+
+    expected = hmac.new(settings.WEBHOOK_SIGNING_SECRET.encode(), raw, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, sig):
+        raise HTTPException(status_code=401, detail="Bad signature")
+
+    try:
+        payload = schemas.UpiWebhookPayload.model_validate_json(raw)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Malformed webhook payload: {e}")
+
     payment = (
         db.query(models.UpiPayment)
         .filter(models.UpiPayment.txn_ref == payload.txn_ref)
@@ -272,6 +308,9 @@ async def payment_webhook(
     )
     if not payment:
         raise HTTPException(status_code=404, detail="Unknown transaction reference")
+
+    if abs(payload.amount - payment.amount) > 0.01:
+        raise HTTPException(status_code=400, detail="Amount mismatch")
 
     if payment.status != "completed":
         payment.status = payload.status

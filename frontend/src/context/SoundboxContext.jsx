@@ -15,7 +15,7 @@ export function SoundboxProvider({ children }) {
 
   // Keep soundbox language in sync with app language if soundbox lang was not explicitly customized
   useEffect(() => {
-    const currentAppLang = i18n.language || 'en';
+    const currentAppLang = (i18n.language || 'en').slice(0, 2);
     const langMap = {
       en: 'en-IN',
       hi: 'hi-IN',
@@ -23,12 +23,12 @@ export function SoundboxProvider({ children }) {
       bn: 'bn-IN',
     };
 
-    const hasStoredLang = localStorage.getItem('vendor360_soundbox_lang');
-    if (!hasStoredLang && langMap[currentAppLang]) {
+    const isCustomized = localStorage.getItem('vendor360_soundbox_lang_custom') === 'true';
+    if (!isCustomized && langMap[currentAppLang]) {
+      const targetLang = langMap[currentAppLang];
       setSettingsState(prev => {
-        const next = { ...prev, lang: langMap[currentAppLang] };
-        saveSoundboxSettings(next);
-        return next;
+        if (prev.lang === targetLang) return prev;
+        return { ...prev, lang: targetLang };
       });
     }
   }, [i18n.language]);
@@ -42,6 +42,11 @@ export function SoundboxProvider({ children }) {
   }, []);
 
   const setLang = useCallback((lang) => {
+    try {
+      localStorage.setItem('vendor360_soundbox_lang_custom', 'true');
+    } catch {
+      // ignore
+    }
     setSettingsState(prev => {
       const next = { ...prev, lang };
       saveSoundboxSettings(next);
@@ -57,7 +62,8 @@ export function SoundboxProvider({ children }) {
     });
   }, []);
 
-  const announce = useCallback(async ({ amount, payerName = null, txnRef = null }) => {
+  const announce = useCallback(async ({ amount, payerName = null, _txnRef = null, txnRef = null }) => {
+    const _ref = _txnRef || txnRef;
     if (!settings.enabled) return;
     await triggerAnnounce({
       amount,

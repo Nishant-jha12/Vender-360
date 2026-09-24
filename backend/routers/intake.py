@@ -23,6 +23,7 @@ import barcodes
 import models
 import schemas
 import security
+import tz_utils
 import stock
 from config import settings
 from database import get_db
@@ -379,12 +380,17 @@ def purchase_register(
     One goods-received note proves a single purchase; the return wants the
     month totalled and split by rate, which is this.
     """
-    year, mon = (int(part) for part in month.split("-"))
-    if not 1 <= mon <= 12:
-        raise HTTPException(status_code=422, detail="Month must be 01 to 12")
+    try:
+        parts = month.split("-")
+        if len(parts) != 2:
+            raise ValueError
+        year, mon = int(parts[0]), int(parts[1])
+        if not (2000 <= year <= 2100 and 1 <= mon <= 12):
+            raise HTTPException(status_code=422, detail="Month must be between 2000-01 and 2100-12")
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=422, detail="Invalid month format, expected YYYY-MM")
 
-    start = datetime(year, mon, 1)
-    end = datetime(year + (mon == 12), (mon % 12) + 1, 1)
+    start, end = tz_utils.shop_month_bounds_utc(year, mon)
 
     sessions = (
         db.query(models.StockIntake)
@@ -555,8 +561,8 @@ def scan(
         gst_rate=item.gst_rate or 0.0,
         hsn_code=item.hsn_code,
         batch_no=None,
-        mfg_date=item.mfg_date,
-        expiry_date=item.expiry_date,
+        mfg_date=None,
+        expiry_date=None,
         source="barcode" if req.barcode else "manual",
     )
     line = applied.line
@@ -590,8 +596,8 @@ def confirm(
     unit_price = req.unit_price if req.unit_price is not None else (item.selling_price or 0.0)
     gst_rate = req.gst_rate if req.gst_rate is not None else (item.gst_rate or 0.0)
     hsn_code = req.hsn_code or item.hsn_code
-    expiry_date = req.expiry_date or item.expiry_date
-    mfg_date = req.mfg_date or item.mfg_date
+    expiry_date = req.expiry_date
+    mfg_date = req.mfg_date
 
     applied = _apply_line(
         session,
@@ -663,6 +669,12 @@ def remove_line(
     )
     if not line:
         raise HTTPException(status_code=404, detail="Line not found")
+
+    if line.intake and line.intake.status == "closed":
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot remove a line from a closed delivery session. The purchase register is already finalized.",
+        )
 
     if line.item_id:
         item = (

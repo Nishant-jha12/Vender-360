@@ -299,9 +299,9 @@ def forgot_password(
     identifier = req.identifier.strip().lower()
     ratelimit.enforce(
         request,
-        "login",
-        settings.LOGIN_RATE_LIMIT,
-        settings.LOGIN_RATE_WINDOW_SECONDS,
+        "reset",
+        settings.RESET_RATE_LIMIT,
+        settings.RESET_RATE_WINDOW_SECONDS,
         identifier=identifier,
     )
 

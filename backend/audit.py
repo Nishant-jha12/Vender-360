@@ -77,15 +77,16 @@ _PRUNE_INTERVAL_SECONDS = 3600
 def client_ip(request: Optional[Request]) -> Optional[str]:
     """The caller's address, as well as we can know it.
 
-    X-Forwarded-For is forgeable by anyone talking to the app directly, so this
-    is evidence to a human reader, never an identity to make a decision on.
+    X-Forwarded-For is only trusted if the immediate peer (request.client.host)
+    is configured in settings.TRUSTED_PROXY_IPS.
     """
     if request is None:
         return None
+    client_host = request.client.host if request.client else None
     forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
+    if forwarded and client_host in settings.TRUSTED_PROXY_IPS:
         return forwarded.split(",")[0].strip()[:64] or None
-    return (request.client.host[:64] if request.client else None)
+    return (client_host[:64] if client_host else None)
 
 
 def describe_device(user_agent: Optional[str]) -> str:

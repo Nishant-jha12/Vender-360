@@ -5,15 +5,17 @@ so the dashboard showed different revenue on every refresh, and the health score
 was the literal integer 78. Each endpoint now returns a `has_data` flag so the
 UI can show an honest empty state instead of a fabricated one.
 """
+import math
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
 
 import models
 import security
+import tz_utils
 from database import get_db
 
 router = APIRouter()
@@ -25,25 +27,27 @@ def sales_trend(
     vendor: models.Vendor = Depends(security.get_current_vendor),
     db: Session = Depends(get_db),
 ):
-    now = datetime.utcnow()
-    start = datetime(now.year, now.month, now.day) - timedelta(days=days - 1)
+    local_today = datetime.now(tz_utils.get_shop_tz()).date()
+    local_start_date = local_today - timedelta(days=days - 1)
+    start_utc, _, _ = tz_utils.shop_day_bounds_utc(local_start_date.strftime("%Y-%m-%d"))
 
     sales = (
         db.query(models.Sale)
-        .filter(models.Sale.vendor_id == vendor.id, models.Sale.created_at >= start)
+        .filter(models.Sale.vendor_id == vendor.id, models.Sale.created_at >= start_utc)
         .all()
     )
 
     buckets = defaultdict(lambda: {"sales": 0.0, "profit": 0.0, "bills": 0})
     for sale in sales:
-        key = sale.created_at.strftime("%Y-%m-%d")
+        local_dt = tz_utils.to_shop_tz(sale.created_at)
+        key = local_dt.strftime("%Y-%m-%d")
         buckets[key]["sales"] += sale.total_amount or 0.0
         buckets[key]["profit"] += (sale.total_amount or 0.0) - (sale.total_cost or 0.0)
         buckets[key]["bills"] += 1
 
     trend = []
     for offset in range(days):
-        day = start + timedelta(days=offset)
+        day = local_start_date + timedelta(days=offset)
         bucket = buckets[day.strftime("%Y-%m-%d")]
         trend.append(
             {
@@ -84,11 +88,13 @@ def health_score(
     something -- an invented credit-readiness number is worse than none.
     """
     now = datetime.utcnow()
-    window_start = now - timedelta(days=30)
+    local_today = datetime.now(tz_utils.get_shop_tz()).date()
+    window_start_local = local_today - timedelta(days=30)
+    window_start_utc, _, _ = tz_utils.shop_day_bounds_utc(window_start_local.strftime("%Y-%m-%d"))
 
     sales = (
         db.query(models.Sale)
-        .filter(models.Sale.vendor_id == vendor.id, models.Sale.created_at >= window_start)
+        .filter(models.Sale.vendor_id == vendor.id, models.Sale.created_at >= window_start_utc)
         .all()
     )
     items = (
@@ -104,14 +110,14 @@ def health_score(
         return {
             "has_data": False,
             "health_score": None,
-            "days_of_history": len({s.created_at.date() for s in sales}),
+            "days_of_history": len({tz_utils.to_shop_tz(s.created_at).date() for s in sales}),
             "sales_recorded": len(sales),
             "message": "Record at least 5 sales and your score will appear here.",
             "breakdown": {},
         }
 
     # 1. Sales consistency: proportion of the last 30 days with any trade.
-    active_days = len({s.created_at.date() for s in sales})
+    active_days = len({tz_utils.to_shop_tz(s.created_at).date() for s in sales})
     sales_consistency = min(100, round((active_days / 30) * 100))
 
     # 2. Inventory turnover: units sold against units held.
@@ -183,17 +189,19 @@ def forecast(
     Until there is enough history it says so rather than shipping a hardcoded
     list of predictions labelled 'AI'.
     """
-    now = datetime.utcnow()
-    start = now - timedelta(days=56)
+    tz = tz_utils.get_shop_tz()
+    now_local = datetime.now(tz)
+    start_local = now_local.date() - timedelta(days=56)
+    start_utc, _, _ = tz_utils.shop_day_bounds_utc(start_local.strftime("%Y-%m-%d"))
 
     sales = (
         db.query(models.Sale)
         .options(joinedload(models.Sale.line_items))
-        .filter(models.Sale.vendor_id == vendor.id, models.Sale.created_at >= start)
+        .filter(models.Sale.vendor_id == vendor.id, models.Sale.created_at >= start_utc)
         .all()
     )
 
-    distinct_days = len({s.created_at.date() for s in sales})
+    distinct_days = len({tz_utils.to_shop_tz(s.created_at).date() for s in sales})
     if distinct_days < 14:
         return {
             "has_data": False,
@@ -209,15 +217,16 @@ def forecast(
     weekday_days = defaultdict(set)
 
     for sale in sales:
-        weekday = sale.created_at.strftime("%A")
-        weekday_days[weekday].add(sale.created_at.date())
+        local_dt = tz_utils.to_shop_tz(sale.created_at)
+        weekday = local_dt.strftime("%A")
+        weekday_days[weekday].add(local_dt.date())
         for line in sale.line_items:
             value = (line.qty or 0) * (line.unit_price or 0)
             per_weekday[weekday][line.sku_name] += value
             per_item_total[line.sku_name] += value
 
-    total_days = len({s.created_at.date() for s in sales}) or 1
-    tomorrow = (now + timedelta(days=1)).strftime("%A")
+    total_days = distinct_days or 1
+    tomorrow = (now_local + timedelta(days=1)).strftime("%A")
     tomorrow_day_count = len(weekday_days.get(tomorrow, set())) or 1
 
     predictions = []
@@ -337,6 +346,10 @@ def heatmap(
     below is illustrative -- there is no hyperlocal data source behind this yet.
     The is_demo flag drives the badge the UI shows, so nobody mistakes these for
     real measurements."""
+    if not (math.isfinite(lat) and math.isfinite(lng) and math.isfinite(radius_km)):
+        raise HTTPException(status_code=422, detail="Latitude, longitude, and radius must be finite numbers")
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lng <= 180.0):
+        raise HTTPException(status_code=422, detail="Latitude must be between -90 and 90, longitude between -180 and 180")
     zones = [
         {
             "id": "z1",

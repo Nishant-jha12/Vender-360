@@ -9,7 +9,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useToast } from '../components/Toast';
 
 export default function Auth() {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { isDark, toggle: toggleTheme } = useTheme();
   const [mode, setMode] = useState('login'); // login | signup | otp | forgot | reset
   const [loading, setLoading] = useState(false);
@@ -87,11 +87,15 @@ export default function Auth() {
   const handleSignup = async (e) => {
     e.preventDefault();
     if (form.password !== form.confirmPassword) {
-      toast.error('The two passwords do not match');
+      toast.error(t('auth.passwords_dont_match', 'The two passwords do not match'));
       return;
     }
     if (form.password.length < 10) {
-      toast.error('Use at least 10 characters for your password');
+      toast.error(t('auth.password_too_short', 'Use at least 10 characters for your password'));
+      return;
+    }
+    if (!form.phone || form.phone.trim().length < 10) {
+      toast.error(t('auth.phone_too_short', 'Please enter a valid phone number (at least 10 digits)'));
       return;
     }
     setLoading(true);
@@ -151,18 +155,18 @@ export default function Auth() {
       // A resend mints a fresh challenge; the old one is replaced.
       setChallengeToken(res.data.challenge_token);
       setDebugOtp(res.data.debug_otp || null);
-      toast.success('A new code has been sent');
+      toast.success(t('auth.new_code_sent', 'A new code has been sent'));
     } catch (err) {
       toast.error(errorMessage(err));
     }
   };
 
   const headings = {
-    login: ['Welcome back', 'Sign in to your store'],
-    signup: ['Create your account', 'Set up your store on Vendor360'],
-    otp: ['Verify it is you', 'Enter the 6-digit code'],
-    forgot: ['Reset your password', 'We will send you a reset link'],
-    reset: ['Choose a new password', 'At least 10 characters'],
+    login: [t('auth.welcome_back', 'Welcome back'), t('auth.sign_in_to_store', 'Sign in to your store')],
+    signup: [t('auth.create_account_title', 'Create your account'), t('auth.create_account_subtitle', 'Set up your store on Vendor360')],
+    otp: [t('auth.verify_title', 'Verify it is you'), t('auth.verify_subtitle', 'Enter the 6-digit code')],
+    forgot: [t('auth.forgot_title', 'Reset your password'), t('auth.forgot_subtitle', 'We will send you a reset link')],
+    reset: [t('auth.reset_title', 'Choose a new password'), t('auth.reset_subtitle', 'At least 10 characters')],
   };
   const [title, subtitle] = headings[mode];
 
@@ -175,7 +179,7 @@ export default function Auth() {
             {(mode === 'otp' || mode === 'forgot' || mode === 'reset') && (
               <button
                 onClick={() => setMode('login')}
-                aria-label="Go back"
+                aria-label={t('auth.go_back', 'Go back')}
                 className="absolute left-4 top-5 opacity-80 hover:opacity-100 focus-visible:ring-2 focus-visible:ring-white rounded-full p-1 outline-none"
               >
                 <ArrowLeft size={22} />
@@ -223,23 +227,36 @@ export default function Auth() {
           <div className="p-6">
             {mode === 'login' && (
               <form onSubmit={handleLogin} className="space-y-4">
-                <Field label="Username or email">
-                  <input name="username" required value={form.username} onChange={set} autoComplete="username" className={inputClass} placeholder="Enter username or email" />
+                <Field label={t('auth.username_or_email', 'Username or email')}>
+                  <input
+                    name="username"
+                    required
+                    value={form.username}
+                    onChange={set}
+                    autoComplete="username"
+                    className={inputClass}
+                    placeholder={t('auth.username_placeholder', 'Enter username or email')}
+                  />
                 </Field>
 
                 <Field
-                  label="Password"
+                  label={t('auth.password', 'Password')}
                   action={
                     <button type="button" onClick={() => setMode('forgot')} className="text-xs font-bold text-brand-primary hover:underline">
-                      Forgot?
+                      {t('auth.forgot', 'Forgot?')}
                     </button>
                   }
                 >
                   <div className="relative">
                     <input
-                      name="password" type={showPassword ? 'text' : 'password'} required
-                      value={form.password} onChange={set} autoComplete="current-password"
-                      className={`${inputClass} pr-10`} placeholder="Your password"
+                      name="password"
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      value={form.password}
+                      onChange={set}
+                      autoComplete="current-password"
+                      className={`${inputClass} pr-10`}
+                      placeholder={t('auth.password_placeholder', 'Your password')}
                     />
                     <PasswordToggle shown={showPassword} onToggle={() => setShowPassword((s) => !s)} />
                   </div>
@@ -247,15 +264,15 @@ export default function Auth() {
 
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} className="w-4 h-4 rounded border-brand-border text-brand-primary focus:ring-brand-primary" />
-                  <span className="text-sm text-brand-ink font-medium">Keep me signed in on this device</span>
+                  <span className="text-sm text-brand-ink font-medium">{t('auth.keep_signed_in', 'Keep me signed in on this device')}</span>
                 </label>
 
-                <SubmitButton loading={loading}>Sign in</SubmitButton>
+                <SubmitButton loading={loading}>{t('auth.sign_in', 'Sign in')}</SubmitButton>
 
                 <p className="text-center text-sm text-brand-muted">
-                  New here?{' '}
+                  {t('auth.new_here', 'New here?')}{' '}
                   <button type="button" onClick={() => setMode('signup')} className="font-bold text-brand-primary hover:underline">
-                    Create an account
+                    {t('auth.create_account', 'Create an account')}
                   </button>
                 </p>
               </form>
@@ -264,29 +281,29 @@ export default function Auth() {
             {mode === 'signup' && (
               <form onSubmit={handleSignup} className="space-y-3">
                 <div className="grid grid-cols-2 gap-3">
-                  <Field label="Your name"><input name="name" required value={form.name} onChange={set} className={inputClass} placeholder="Rakesh Sharma" /></Field>
-                  <Field label="Username"><input name="username" required minLength={3} value={form.username} onChange={set} className={inputClass} placeholder="rakesh_store" /></Field>
+                  <Field label={t('auth.your_name', 'Your name')}><input name="name" required value={form.name} onChange={set} className={inputClass} placeholder="Rakesh Sharma" /></Field>
+                  <Field label={t('auth.username', 'Username')}><input name="username" required minLength={3} value={form.username} onChange={set} className={inputClass} placeholder="rakesh_store" /></Field>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <Field label="Email"><input name="email" type="email" required value={form.email} onChange={set} className={inputClass} placeholder="you@example.com" /></Field>
-                  <Field label="Phone"><input name="phone" required value={form.phone} onChange={set} className={inputClass} placeholder="+91 98765 43210" /></Field>
+                  <Field label={t('auth.email', 'Email')}><input name="email" type="email" required value={form.email} onChange={set} className={inputClass} placeholder="you@example.com" /></Field>
+                  <Field label={t('auth.phone', 'Phone')}><input name="phone" required minLength={10} value={form.phone} onChange={set} className={inputClass} placeholder="+91 98765 43210" /></Field>
                 </div>
-                <Field label="Password">
+                <Field label={t('auth.password', 'Password')}>
                   <div className="relative">
-                    <input name="password" type={showPassword ? 'text' : 'password'} required minLength={8} value={form.password} onChange={set} autoComplete="new-password" className={`${inputClass} pr-10`} placeholder="At least 8 characters" />
+                    <input name="password" type={showPassword ? 'text' : 'password'} required minLength={10} value={form.password} onChange={set} autoComplete="new-password" className={`${inputClass} pr-10`} placeholder={t('auth.at_least_10_chars', 'At least 10 characters')} />
                     <PasswordToggle shown={showPassword} onToggle={() => setShowPassword((s) => !s)} />
                   </div>
                 </Field>
-                <Field label="Confirm password">
+                <Field label={t('auth.confirm_password', 'Confirm password')}>
                   <input name="confirmPassword" type="password" required value={form.confirmPassword} onChange={set} autoComplete="new-password" className={inputClass} />
                 </Field>
 
-                <SubmitButton loading={loading}>Create account</SubmitButton>
+                <SubmitButton loading={loading}>{t('auth.create_account_button', 'Create account')}</SubmitButton>
 
                 <p className="text-center text-sm text-brand-muted">
-                  Already registered?{' '}
+                  {t('auth.already_registered', 'Already registered?')}{' '}
                   <button type="button" onClick={() => setMode('login')} className="font-bold text-brand-primary hover:underline">
-                    Sign in
+                    {t('auth.sign_in', 'Sign in')}
                   </button>
                 </p>
               </form>
@@ -296,7 +313,7 @@ export default function Auth() {
               <form onSubmit={handleVerify} className="space-y-4">
                 <div className="bg-brand-bg p-4 rounded-2xl border border-brand-border text-center">
                   <p className="text-sm text-brand-ink">
-                    We sent a 6-digit code to your registered phone.
+                    {t('auth.code_sent', 'We sent a 6-digit code to your registered phone.')}
                   </p>
                   {debugOtp && (
                     <p className="text-xs text-brand-amber font-bold mt-2">
@@ -305,7 +322,7 @@ export default function Auth() {
                   )}
                 </div>
 
-                <Field label="Verification code">
+                <Field label={t('auth.verify_title', 'Verification code')}>
                   <input
                     name="otp" inputMode="numeric" pattern="[0-9]*" maxLength={6} required
                     value={form.otp} onChange={set} autoComplete="one-time-code"
@@ -315,11 +332,11 @@ export default function Auth() {
                 </Field>
 
                 <button type="submit" disabled={loading || form.otp.length !== 6} className="w-full bg-brand-primary text-brand-on-primary font-bold py-3 rounded-2xl shadow-md hover:bg-brand-primary-dark active:scale-[0.98] transition-all flex justify-center items-center disabled:opacity-50">
-                  {loading ? <Loader2 className="animate-spin" size={20} /> : 'Verify and continue'}
+                  {loading ? <Loader2 className="animate-spin" size={20} /> : t('auth.verify_button', 'Verify and continue')}
                 </button>
 
                 <button type="button" onClick={resend} className="w-full text-xs font-bold text-brand-primary hover:underline">
-                  Send a new code
+                  {t('auth.send_new_code', 'Send a new code')}
                 </button>
               </form>
             )}
@@ -328,7 +345,7 @@ export default function Auth() {
               <form onSubmit={requestReset} className="space-y-4">
                 <label className="block">
                   <span className="text-[11px] font-bold text-brand-muted uppercase tracking-wider">
-                    Username or email
+                    {t('auth.username_or_email', 'Username or email')}
                   </span>
                   <input
                     required
@@ -337,7 +354,7 @@ export default function Auth() {
                     onChange={set}
                     autoComplete="username"
                     className="w-full mt-1 bg-brand-bg border border-brand-border rounded-2xl px-4 py-3 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-primary"
-                    placeholder="Enter username or email"
+                    placeholder={t('auth.username_placeholder', 'Enter username or email')}
                   />
                 </label>
                 <button
@@ -345,10 +362,10 @@ export default function Auth() {
                   disabled={loading || !form.username.trim()}
                   className="w-full bg-brand-primary text-brand-on-primary font-bold py-3 rounded-2xl flex items-center justify-center gap-2 disabled:opacity-60"
                 >
-                  {loading && <Loader2 size={16} className="animate-spin" />} Send the reset link
+                  {loading && <Loader2 size={16} className="animate-spin" />} {t('auth.send_reset_link', 'Send the reset link')}
                 </button>
                 <button type="button" onClick={() => setMode('login')} className="w-full bg-brand-bg border border-brand-border text-brand-ink font-bold py-3 rounded-2xl">
-                  Back to sign in
+                  {t('auth.back_to_sign_in', 'Back to sign in')}
                 </button>
               </form>
             )}
@@ -357,7 +374,7 @@ export default function Auth() {
               <form onSubmit={submitReset} className="space-y-4">
                 <label className="block">
                   <span className="text-[11px] font-bold text-brand-muted uppercase tracking-wider">
-                    New password
+                    {t('auth.new_password', 'New password')}
                   </span>
                   <input
                     required
@@ -368,12 +385,12 @@ export default function Auth() {
                     autoComplete="new-password"
                     minLength={10}
                     className="w-full mt-1 bg-brand-bg border border-brand-border rounded-2xl px-4 py-3 text-sm text-brand-ink focus:outline-none focus:ring-2 focus:ring-brand-primary"
-                    placeholder="At least 10 characters"
+                    placeholder={t('auth.at_least_10_chars', 'At least 10 characters')}
                   />
                 </label>
                 <label className="block">
                   <span className="text-[11px] font-bold text-brand-muted uppercase tracking-wider">
-                    Confirm new password
+                    {t('auth.confirm_new_password', 'Confirm new password')}
                   </span>
                   <input
                     required
@@ -386,14 +403,14 @@ export default function Auth() {
                   />
                 </label>
                 <p className="text-[11px] text-brand-muted">
-                  Changing your password signs you out everywhere else.
+                  {t('auth.signs_you_out', 'Changing your password signs you out everywhere else.')}
                 </p>
                 <button
                   type="submit"
                   disabled={loading || form.password.length < 10}
                   className="w-full bg-brand-primary text-brand-on-primary font-bold py-3 rounded-2xl flex items-center justify-center gap-2 disabled:opacity-60"
                 >
-                  {loading && <Loader2 size={16} className="animate-spin" />} Set the new password
+                  {loading && <Loader2 size={16} className="animate-spin" />} {t('auth.set_new_password', 'Set the new password')}
                 </button>
               </form>
             )}

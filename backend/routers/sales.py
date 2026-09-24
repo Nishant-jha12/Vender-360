@@ -8,12 +8,14 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 import models
 import schemas
 import security
 import stock
+import tz_utils
 from database import get_db
 
 router = APIRouter()
@@ -184,19 +186,37 @@ def create_sale(
                 "customer_balance": existing.customer.total_credit_balance if existing.customer else None,
             }
 
-    sale, stock_warnings, customer = _process_single_sale(
-        db=db,
-        vendor=vendor,
-        items=req.items,
-        payment_mode=req.payment_mode,
-        customer_id=req.customer_id,
-        note=req.note,
-        offline_id=req.offline_id,
-        created_at=req.created_at,
-    )
-
-    db.commit()
-    db.refresh(sale)
+    try:
+        sale, stock_warnings, customer = _process_single_sale(
+            db=db,
+            vendor=vendor,
+            items=req.items,
+            payment_mode=req.payment_mode,
+            customer_id=req.customer_id,
+            note=req.note,
+            offline_id=req.offline_id,
+            created_at=req.created_at,
+        )
+        db.commit()
+        db.refresh(sale)
+    except IntegrityError:
+        db.rollback()
+        if req.offline_id:
+            existing = (
+                db.query(models.Sale)
+                .filter(
+                    models.Sale.vendor_id == vendor.id,
+                    models.Sale.offline_id == req.offline_id,
+                )
+                .first()
+            )
+            if existing:
+                return {
+                    "sale": schemas.SaleResponse.model_validate(existing).model_dump(),
+                    "stock_warnings": [],
+                    "customer_balance": existing.customer.total_credit_balance if existing.customer else None,
+                }
+        raise
 
     return {
         "sale": schemas.SaleResponse.model_validate(sale).model_dump(),
@@ -220,6 +240,7 @@ def sync_batch_sales(
     synced_ids: List[str] = []
     duplicates_skipped: List[str] = []
     all_warnings: List[str] = []
+    failed_items: List[schemas.SaleBatchSyncFailedItem] = []
 
     for item in req.sales:
         existing = (
@@ -248,8 +269,12 @@ def sync_batch_sales(
                 )
                 synced_ids.append(item.offline_id)
                 all_warnings.extend(warnings)
-        except Exception:
-            continue
+        except IntegrityError:
+            duplicates_skipped.append(item.offline_id)
+        except Exception as exc:
+            failed_items.append(
+                schemas.SaleBatchSyncFailedItem(offline_id=item.offline_id, reason=str(exc))
+            )
 
     db.commit()
 
@@ -257,6 +282,7 @@ def sync_batch_sales(
         synced_ids=synced_ids,
         duplicates_skipped=duplicates_skipped,
         stock_warnings=all_warnings,
+        failed=failed_items,
         synced_count=len(synced_ids),
     )
 
@@ -288,15 +314,10 @@ def day_close(
     Shopkeepers close their books daily -- this is the screen that earns the
     habit.
     """
-    if day:
-        try:
-            start = datetime.strptime(day, "%Y-%m-%d")
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Use YYYY-MM-DD for the day")
-    else:
-        now = datetime.utcnow()
-        start = datetime(now.year, now.month, now.day)
-    end = start + timedelta(days=1)
+    try:
+        start, end, date_str = tz_utils.shop_day_bounds_utc(day)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Use YYYY-MM-DD for the day")
 
     sales = (
         db.query(models.Sale)
@@ -327,7 +348,7 @@ def day_close(
     profit = round(revenue - cost, 2)
 
     return {
-        "date": start.strftime("%Y-%m-%d"),
+        "date": date_str,
         "bill_count": len(sales),
         "revenue": round(revenue, 2),
         "profit": profit,
@@ -364,12 +385,30 @@ def void_sale(
             stock.restore_sale_item(db, line, item)
             if item:
                 item.sale_count = max(0, (item.sale_count or 0) - 1)
+                db.add(
+                    models.Transaction(
+                        vendor_id=vendor.id,
+                        item_id=item.id,
+                        type="adjustment",
+                        qty=line.qty,
+                        source=f"Void sale {sale.id[:8]}",
+                    )
+                )
 
     if sale.customer_id:
         customer = db.query(models.Customer).filter(models.Customer.id == sale.customer_id).first()
         if customer:
             customer.total_credit_balance = round(
-                max(0.0, (customer.total_credit_balance or 0.0) - (sale.total_amount or 0.0)), 2
+                (customer.total_credit_balance or 0.0) - (sale.total_amount or 0.0), 2
+            )
+            db.add(
+                models.KhataTransaction(
+                    customer_id=customer.id,
+                    amount=sale.total_amount,
+                    transaction_type="payment",
+                    notes=f"Reversal of voided sale {sale.id[:8]}",
+                    date=datetime.utcnow(),
+                )
             )
 
     db.add(

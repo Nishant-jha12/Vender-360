@@ -1,12 +1,15 @@
 import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { api, isNetworkError } from '../lib/api';
 import * as offlineDb from '../lib/offlineDb';
+import { useAuth } from './AuthContext';
 
 const SyncContext = createContext({
   isOnline: true,
   isSyncing: false,
   pendingCount: 0,
   pendingSales: [],
+  failedCount: 0,
+  failedSales: [],
   lastSyncedAt: null,
   syncCenterOpen: false,
   syncError: null,
@@ -17,10 +20,15 @@ const SyncContext = createContext({
 });
 
 export function SyncProvider({ children }) {
+  const { auth, vendor } = useAuth();
+  const vendorId = vendor?.id || auth?.vendor_id || null;
+
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
   const [pendingSales, setPendingSales] = useState([]);
+  const [failedCount, setFailedCount] = useState(0);
+  const [failedSales, setFailedSales] = useState([]);
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const [syncCenterOpen, setSyncCenterOpen] = useState(false);
   const [syncError, setSyncError] = useState(null);
@@ -29,13 +37,18 @@ export function SyncProvider({ children }) {
 
   const refreshPending = useCallback(async () => {
     try {
-      const sales = await offlineDb.getPendingSales();
+      const [sales, failed] = await Promise.all([
+        offlineDb.getPendingSales(vendorId),
+        offlineDb.getFailedSales(vendorId),
+      ]);
       setPendingSales(sales);
       setPendingCount(sales.length);
+      setFailedSales(failed);
+      setFailedCount(failed.length);
     } catch {
       // IndexedDB might not be initialized or accessible yet
     }
-  }, []);
+  }, [vendorId]);
 
   const pingServer = useCallback(async () => {
     try {
@@ -54,11 +67,12 @@ export function SyncProvider({ children }) {
     setSyncError(null);
 
     try {
-      const pending = await offlineDb.getPendingSales();
+      const pending = await offlineDb.getPendingSales(vendorId);
       if (!pending.length) {
         const now = new Date().toISOString();
         setLastSyncedAt(now);
         await offlineDb.setMeta('last_synced_at', now);
+        await refreshPending();
         return { synced: 0, skipped: 0 };
       }
 
@@ -88,11 +102,16 @@ export function SyncProvider({ children }) {
       };
 
       const res = await api.post('/sales/sync-batch', batchPayload);
-      const { synced_ids = [], duplicates_skipped = [], stock_warnings = [] } = res.data;
+      const { synced_ids = [], duplicates_skipped = [], stock_warnings = [], failed = [] } = res.data;
 
       // Mark all processed IDs as synced (remove from pending outbox)
       const toClear = [...synced_ids, ...duplicates_skipped];
       await offlineDb.markSalesSynced(toClear);
+
+      // Mark any failed items with reasons
+      for (const item of failed) {
+        await offlineDb.markSaleFailed(item.offline_id, item.reason);
+      }
 
       const now = new Date().toISOString();
       setLastSyncedAt(now);
@@ -105,6 +124,7 @@ export function SyncProvider({ children }) {
           detail: {
             syncedCount: synced_ids.length,
             duplicatesCount: duplicates_skipped.length,
+            failedCount: failed.length,
             warnings: stock_warnings,
           },
         })
@@ -113,6 +133,7 @@ export function SyncProvider({ children }) {
       return {
         synced: synced_ids.length,
         skipped: duplicates_skipped.length,
+        failed: failed.length,
         warnings: stock_warnings,
       };
     } catch (err) {
@@ -126,7 +147,7 @@ export function SyncProvider({ children }) {
       syncingRef.current = false;
       setIsSyncing(false);
     }
-  }, [pingServer, refreshPending]);
+  }, [pingServer, refreshPending, vendorId]);
 
   // Network event listeners
   useEffect(() => {
@@ -161,7 +182,7 @@ export function SyncProvider({ children }) {
     // Periodic check every 30 seconds if online
     const interval = setInterval(() => {
       if (navigator.onLine && !syncingRef.current) {
-        offlineDb.getPendingCount().then((count) => {
+        offlineDb.getPendingCount(vendorId).then((count) => {
           if (count > 0) {
             syncNow(true).catch(() => {});
           }
@@ -174,13 +195,15 @@ export function SyncProvider({ children }) {
       window.removeEventListener('offline', handleOffline);
       clearInterval(interval);
     };
-  }, [pingServer, syncNow, refreshPending]);
+  }, [pingServer, syncNow, refreshPending, vendorId]);
 
   const value = {
     isOnline,
     isSyncing,
     pendingCount,
     pendingSales,
+    failedCount,
+    failedSales,
     lastSyncedAt,
     syncCenterOpen,
     syncError,

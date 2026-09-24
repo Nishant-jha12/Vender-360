@@ -137,7 +137,7 @@ def get_current_vendor(
 
     try:
         payload = decode_access_token(raw_token)
-    except ValueError:
+    except Exception:
         raise CREDENTIALS_ERROR
 
     vendor = db.query(models.Vendor).filter(models.Vendor.id == payload["sub"]).first()
